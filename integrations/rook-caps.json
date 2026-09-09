@@ -1,0 +1,331 @@
+[
+  {
+    "name": "pianobar-state",
+    "command": "/usr/local/bin/pianobar-rook state",
+    "args": [],
+    "description": "Player state, pending request, active prompt and terminal output.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-actions",
+    "command": "/usr/local/bin/pianobar-rook actions",
+    "args": [],
+    "description": "Discover all native actions, their keys and whether currently enabled.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-stations",
+    "command": "/usr/local/bin/pianobar-rook stations",
+    "args": [],
+    "description": "List stations and stable station IDs.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-library",
+    "command": "/usr/local/bin/pianobar-rook library",
+    "args": [],
+    "description": "List saved tracks and IDs.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-settings",
+    "command": "/usr/local/bin/pianobar-rook settings",
+    "args": [],
+    "description": "Read settings with passwords omitted.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-browsers",
+    "command": "/usr/local/bin/pianobar-rook browsers",
+    "args": [],
+    "description": "List connected pages, desired audio, volume, readiness and reported playback status.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-command",
+    "command": "/usr/local/bin/pianobar-rook command {json}",
+    "args": [
+      "json"
+    ],
+    "description": "Send one command as a JSON object, including prompt replies: text and promptId. Inspect state after commands.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-settings-update",
+    "command": "/usr/local/bin/pianobar-rook settings-update {json}",
+    "args": [
+      "json"
+    ],
+    "description": "Update settings with a JSON object containing settings and optional apply. Use direct authenticated REST for credentials to avoid Rook journal retention.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-browser-update",
+    "command": "/usr/local/bin/pianobar-rook browser-update {json}",
+    "args": [
+      "json"
+    ],
+    "description": "Update a page with JSON: id and name, volume (0..1), or enabled (boolean).",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-route",
+    "command": "/usr/local/bin/pianobar-rook route {targets}",
+    "args": [
+      "targets"
+    ],
+    "description": "Replace browser audio destinations: targets is all, none, or a JSON array of browser IDs. All selects currently connected pages; new pages start silent.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-station",
+    "command": "/usr/local/bin/pianobar-rook station {id}",
+    "args": [
+      "id"
+    ],
+    "description": "Select a station by ID.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-saved",
+    "command": "/usr/local/bin/pianobar-rook saved {id}",
+    "args": [
+      "id"
+    ],
+    "description": "Play a saved track by ID.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-output",
+    "command": "/usr/local/bin/pianobar-rook output {mode}",
+    "args": [
+      "mode"
+    ],
+    "description": "Set native audio output: host, browser, or both.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-help",
+    "command": "/usr/local/bin/pianobar-rook act_help",
+    "args": [],
+    "description": "Invoke act_help. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-songlove",
+    "command": "/usr/local/bin/pianobar-rook act_songlove",
+    "args": [],
+    "description": "Invoke act_songlove. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-songban",
+    "command": "/usr/local/bin/pianobar-rook act_songban",
+    "args": [],
+    "description": "Invoke act_songban. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-stationaddmusic",
+    "command": "/usr/local/bin/pianobar-rook act_stationaddmusic",
+    "args": [],
+    "description": "Invoke act_stationaddmusic. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-stationcreate",
+    "command": "/usr/local/bin/pianobar-rook act_stationcreate",
+    "args": [],
+    "description": "Invoke act_stationcreate. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-stationdelete",
+    "command": "/usr/local/bin/pianobar-rook act_stationdelete",
+    "args": [],
+    "description": "Invoke act_stationdelete. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-songexplain",
+    "command": "/usr/local/bin/pianobar-rook act_songexplain",
+    "args": [],
+    "description": "Invoke act_songexplain. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-stationaddbygenre",
+    "command": "/usr/local/bin/pianobar-rook act_stationaddbygenre",
+    "args": [],
+    "description": "Invoke act_stationaddbygenre. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-history",
+    "command": "/usr/local/bin/pianobar-rook act_history",
+    "args": [],
+    "description": "Invoke act_history. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-songinfo",
+    "command": "/usr/local/bin/pianobar-rook act_songinfo",
+    "args": [],
+    "description": "Invoke act_songinfo. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-addshared",
+    "command": "/usr/local/bin/pianobar-rook act_addshared",
+    "args": [],
+    "description": "Invoke act_addshared. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-songnext",
+    "command": "/usr/local/bin/pianobar-rook act_songnext",
+    "args": [],
+    "description": "Invoke act_songnext. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-songpausetoggle",
+    "command": "/usr/local/bin/pianobar-rook act_songpausetoggle",
+    "args": [],
+    "description": "Invoke act_songpausetoggle. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-quit",
+    "command": "/usr/local/bin/pianobar-rook act_quit",
+    "args": [],
+    "description": "Invoke act_quit. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-stationrename",
+    "command": "/usr/local/bin/pianobar-rook act_stationrename",
+    "args": [],
+    "description": "Invoke act_stationrename. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-stationchange",
+    "command": "/usr/local/bin/pianobar-rook act_stationchange",
+    "args": [],
+    "description": "Invoke act_stationchange. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-songtired",
+    "command": "/usr/local/bin/pianobar-rook act_songtired",
+    "args": [],
+    "description": "Invoke act_songtired. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-upcoming",
+    "command": "/usr/local/bin/pianobar-rook act_upcoming",
+    "args": [],
+    "description": "Invoke act_upcoming. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-stationselectquickmix",
+    "command": "/usr/local/bin/pianobar-rook act_stationselectquickmix",
+    "args": [],
+    "description": "Invoke act_stationselectquickmix. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-debug",
+    "command": "/usr/local/bin/pianobar-rook act_debug",
+    "args": [],
+    "description": "Invoke act_debug. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-bookmark",
+    "command": "/usr/local/bin/pianobar-rook act_bookmark",
+    "args": [],
+    "description": "Invoke act_bookmark. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-voldown",
+    "command": "/usr/local/bin/pianobar-rook act_voldown",
+    "args": [],
+    "description": "Invoke act_voldown. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-volup",
+    "command": "/usr/local/bin/pianobar-rook act_volup",
+    "args": [],
+    "description": "Invoke act_volup. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-managestation",
+    "command": "/usr/local/bin/pianobar-rook act_managestation",
+    "args": [],
+    "description": "Invoke act_managestation. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-songpausetoggle2",
+    "command": "/usr/local/bin/pianobar-rook act_songpausetoggle2",
+    "args": [],
+    "description": "Invoke act_songpausetoggle2. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-stationcreatefromsong",
+    "command": "/usr/local/bin/pianobar-rook act_stationcreatefromsong",
+    "args": [],
+    "description": "Invoke act_stationcreatefromsong. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-songplay",
+    "command": "/usr/local/bin/pianobar-rook act_songplay",
+    "args": [],
+    "description": "Invoke act_songplay. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-songpause",
+    "command": "/usr/local/bin/pianobar-rook act_songpause",
+    "args": [],
+    "description": "Invoke act_songpause. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-volreset",
+    "command": "/usr/local/bin/pianobar-rook act_volreset",
+    "args": [],
+    "description": "Invoke act_volreset. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-account-settings",
+    "command": "/usr/local/bin/pianobar-rook act_settings",
+    "args": [],
+    "description": "Invoke act_settings. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-offline",
+    "command": "/usr/local/bin/pianobar-rook act_offline",
+    "args": [],
+    "description": "Invoke act_offline. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  },
+  {
+    "name": "pianobar-web",
+    "command": "/usr/local/bin/pianobar-rook act_web",
+    "args": [],
+    "description": "Invoke act_web. Availability depends on player state. Follow prompts via pianobar-command.",
+    "timeout": 45
+  }
+]

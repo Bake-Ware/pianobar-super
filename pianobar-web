@@ -24,6 +24,7 @@ import termios
 import threading
 import tty
 import tempfile
+import time
 import webbrowser
 from urllib.parse import urlsplit
 
@@ -188,6 +189,114 @@ class Configuration:
         return self.public()
 
 
+class Browsers:
+    """Ephemeral per-page leases and server-enforced audio destinations."""
+    lease = 90
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.pages = {}
+
+    def prune(self):
+        now = time.monotonic()
+        for key in list(self.pages):
+            if now - self.pages[key]['seen'] > self.lease:
+                del self.pages[key]
+
+    def get(self, key):
+        self.prune()
+        if not isinstance(key, str) or key not in self.pages:
+            raise ValueError('Unknown or expired browser. Register this page again.')
+        return self.pages[key]
+
+    def public(self, page):
+        return {k: v for k, v in page.items() if k != 'seen'}
+
+    def listing(self):
+        with self.lock:
+            self.prune()
+            return {'clients': [dict(self.public(p), lastSeenSeconds=round(time.monotonic() - p['seen'], 1))
+                                for p in self.pages.values()], 'leaseSeconds': self.lease}
+
+    def register(self, message):
+        if set(message) - {'name'}:
+            raise ValueError('Unsupported registration fields.')
+        name = Configuration.line(message.get('name', 'Browser'), 'Browser name').strip()
+        if not name or len(name) > 80:
+            raise ValueError('Browser name must contain 1–80 characters.')
+        with self.lock:
+            self.prune()
+            if len(self.pages) >= 256:
+                raise ValueError('Too many registered browsers.')
+            key = secrets.token_hex(16)
+            page = dict(id=key, name=name, enabled=False, volume=1.0,
+                        status='idle', ready=False, seen=time.monotonic())
+            self.pages[key] = page
+            return self.public(page)
+
+    def heartbeat(self, message):
+        if set(message) - {'id', 'status', 'ready'}:
+            raise ValueError('Unsupported heartbeat fields.')
+        if message.get('status') not in ('idle', 'waiting', 'playing', 'blocked', 'error') or type(message.get('ready')) is not bool:
+            raise ValueError('Invalid browser status.')
+        with self.lock:
+            page = self.get(message.get('id'))
+            page.update(status=message['status'], ready=message['ready'], seen=time.monotonic())
+            return self.public(page)
+
+    def update(self, message):
+        if set(message) - {'id', 'name', 'enabled', 'volume'} or len(message) < 2:
+            raise ValueError('Supply a browser id and name, enabled, or volume.')
+        changes = {k: v for k, v in message.items() if k != 'id'}
+        if 'name' in changes:
+            name = Configuration.line(changes['name'], 'Browser name').strip()
+            if not name or len(name) > 80:
+                raise ValueError('Browser name must contain 1–80 characters.')
+            changes['name'] = name
+        if 'enabled' in changes and type(changes['enabled']) is not bool:
+            raise ValueError('enabled must be a boolean.')
+        if 'volume' in changes and (type(changes['volume']) not in (int, float) or not 0 <= changes['volume'] <= 1):
+            raise ValueError('volume must be between 0 and 1.')
+        with self.lock:
+            page = self.get(message.get('id'))
+            page.update(changes)
+            return self.public(page)
+
+    def route(self, message, session):
+        with self.lock:
+            self.prune()
+            if message == {'mode': 'all'}:
+                targets = set(self.pages)
+            elif message == {'mode': 'none'}:
+                targets = set()
+            elif set(message) == {'ids'} and isinstance(message['ids'], list) and all(isinstance(x, str) for x in message['ids']):
+                targets = set(message['ids'])
+                if targets - self.pages.keys():
+                    raise ValueError('One or more browsers are unknown or expired.')
+            else:
+                raise ValueError('Supply ids: [...] or mode: all/none.')
+            # Preserve native speakers when browser audio needs enabling.
+            if targets and session.state.get('output') == 'host':
+                session.command({'output': 'both'})
+            for key, page in self.pages.items():
+                page['enabled'] = key in targets
+            return self.listing()
+
+    def allowed(self, key):
+        with self.lock:
+            try:
+                return self.get(key)['enabled']
+            except ValueError:
+                return False
+
+    def unregister(self, message):
+        if set(message) != {'id'} or not isinstance(message['id'], str):
+            raise ValueError('Supply a browser id.')
+        with self.lock:
+            self.pages.pop(message['id'], None)
+        return {'ok': True}
+
+
 class Session:
     def __init__(self):
         self.condition = threading.Condition()
@@ -202,7 +311,8 @@ class Session:
         self.library_signature = None
         self.library_items = []
         self.audio_lock = threading.Lock()
-        self.audio_listeners = set()
+        self.audio_listeners = {}
+        self.clients = Browsers()
         self.initial_output = 'host'
         self.setup_required = False
         self.quit_requested = False
@@ -243,7 +353,9 @@ class Session:
             if size != len(packet) - 20 or not 8000 <= rate <= 192000 or not 1 <= channels <= 8:
                 continue
             with self.audio_lock:
-                for listener in self.audio_listeners:
+                for listener, client_id in self.audio_listeners.items():
+                    if not self.clients.allowed(client_id):
+                        continue
                     if listener.full():
                         with contextlib.suppress(queue.Empty):
                             listener.get_nowait()
@@ -377,6 +489,11 @@ class Session:
         return data, mime
 
     def command(self, message):
+        operations = {'playSaved', 'output', 'selectStation', 'action', 'text'}
+        if len(set(message) & operations) != 1 or set(message) - operations - {'promptId'}:
+            raise ValueError('Supply exactly one command operation.')
+        if 'promptId' in message and 'text' not in message:
+            raise ValueError('promptId is only valid with text.')
         if "playSaved" in message:
             song_id = message["playSaved"]
             if not isinstance(song_id, str) or not re.fullmatch(r"[0-9a-f]{64}\.mka", song_id):
@@ -526,6 +643,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self.valid_request():
             return
         parsed = urlsplit(self.path)
+        if parsed.path == '/api/clients':
+            self.reply(200, json.dumps(self.server.session.clients.listing()).encode())
+            return
+        if parsed.path in ('/api/actions', '/api/stations'):
+            key = parsed.path.rsplit('/', 1)[-1]
+            with self.server.session.condition:
+                data = {key: self.server.session.state.get(key, [])}
+            self.reply(200, json.dumps(data).encode())
+            return
         if parsed.path == '/api/settings':
             try:
                 self.reply(200, json.dumps(self.server.configuration.public()).encode())
@@ -535,8 +661,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if parsed.path == '/api/audio':
             listener = queue.Queue(maxsize=12)
             session = self.server.session
+            client_id = self.headers.get('X-Pianobar-Client')
+            try:
+                with session.clients.lock:
+                    session.clients.get(client_id)
+            except ValueError as error:
+                self.reply(400, json.dumps({'error': str(error)}).encode())
+                return
             with session.audio_lock:
-                session.audio_listeners.add(listener)
+                session.audio_listeners[listener] = client_id
             try:
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/octet-stream')
@@ -549,13 +682,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         packet = listener.get(timeout=1)
                     except queue.Empty:
                         packet = bytes(20)  # Keepalive while paused or between tracks.
+                    if not session.clients.allowed(client_id):
+                        packet = bytes(20)
                     self.wfile.write(packet)
                     self.wfile.flush()
             except (OSError, TimeoutError):
                 pass
             finally:
                 with session.audio_lock:
-                    session.audio_listeners.discard(listener)
+                    session.audio_listeners.pop(listener, None)
             return
         if parsed.path.startswith('/api/artwork/'):
             if not self.valid_request():
@@ -595,7 +730,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.reply(200, (self.server.assets / name).read_bytes(), mime)
 
     def do_POST(self):
-        if self.path not in ("/api/command", "/api/settings"):
+        if self.path not in ("/api/command", "/api/settings", '/api/clients/register',
+                             '/api/clients/heartbeat', '/api/clients/update',
+                             '/api/clients/route', '/api/clients/unregister'):
             self.reply(404, b"Not found", "text/plain")
             return
         if not self.valid_request():
@@ -611,7 +748,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             message = json.loads(self.rfile.read(length))
             if not isinstance(message, dict):
                 raise ValueError("Invalid request.")
-            if self.path == '/api/settings':
+            if self.path.startswith('/api/clients/'):
+                operation = self.path.rsplit('/', 1)[-1]
+                registry = self.server.session.clients
+                result = (registry.route(message, self.server.session) if operation == 'route'
+                          else getattr(registry, operation)(message))
+                self.reply(200, json.dumps(result).encode())
+                return
+            elif self.path == '/api/settings':
                 session = self.server.session
                 with session.condition:
                     if message.get('apply') and session.state.get('cachePending', 0):
@@ -741,6 +885,7 @@ def main():
             if session.restart.wait(.1):
                 session.close()
                 replacement = Session()
+                replacement.clients = session.clients
                 replacement.revision = session.revision + 1
                 replacement.prompt['id'] = session.prompt['id'] + 1
                 session = replacement

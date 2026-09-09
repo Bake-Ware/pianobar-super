@@ -445,3 +445,12 @@ PandoraBar_
 .. _PandoraBar: https://hackaday.com/2012/09/20/how-to-build-your-own-dedicated-pandora-radio/
 .. _Pandora’s Box: http://www.instructables.com/id/Pandoras-Box-An-Internet-Radio-player-made-with/
 
+
+REST API and Rook control
+-------------------------
+
+All player controls and per-browser audio routing are available through the
+REST API and Rook capabilities. Open pages register automatically; name each
+page beside **Listen here** and route audio to one, several, all, or none.
+See ``integrations/README.md`` for endpoints, authentication, browser activation,
+and the Rook capability manifest.

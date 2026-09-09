@@ -1,0 +1,60 @@
+#!/usr/bin/env python3
+"""Rook command-cap adapter for the same REST API used by browser clients."""
+import base64
+import json
+import os
+from pathlib import Path
+import sys
+import urllib.error
+import urllib.request
+
+
+def request(operation, argument=None):
+    reads = {'state': 'state', 'actions': 'actions', 'stations': 'stations',
+             'library': 'library', 'settings': 'settings', 'browsers': 'clients'}
+    payload = None
+    if operation in reads:
+        path = '/api/' + reads[operation]
+    elif operation.startswith('act_'):
+        path, payload = '/api/command', {'action': operation}
+    elif operation in ('command', 'settings-update', 'browser-update'):
+        path = {'command': '/api/command', 'settings-update': '/api/settings',
+                'browser-update': '/api/clients/update'}[operation]
+        payload = json.loads(argument)
+        if not isinstance(payload, dict):
+            raise ValueError('Supply a JSON object.')
+    elif operation == 'route':
+        path = '/api/clients/route'
+        payload = {'mode': argument} if argument in ('all', 'none') else {'ids': json.loads(argument)}
+    elif operation in ('station', 'saved', 'output'):
+        path = '/api/command'
+        payload = {{'station': 'selectStation', 'saved': 'playSaved', 'output': 'output'}[operation]: argument}
+    else:
+        raise ValueError('Unknown operation. Use actions to discover native controls.')
+    headers = {'Content-Type': 'application/json'}
+    config = Path(os.environ.get('PIANOBAR_WEB_CONFIG', '/var/lib/pianobar/.config/pianobar/web.json'))
+    if config.exists():
+        password = json.loads(config.read_text()).get('password')
+        if password:
+            headers['Authorization'] = 'Basic ' + base64.b64encode(('pianobar:' + password).encode()).decode()
+    origin = os.environ.get('PIANOBAR_API_URL', 'http://127.0.0.1:8765').rstrip('/')
+    req = urllib.request.Request(origin + path, None if payload is None else json.dumps(payload).encode(), headers)
+    with urllib.request.urlopen(req, timeout=35) as response:
+        return json.load(response)
+
+
+if __name__ == '__main__':
+    try:
+        if not 2 <= len(sys.argv) <= 3:
+            raise ValueError('Usage: pianobar-rook OPERATION [ARGUMENT]')
+        print(json.dumps(request(*sys.argv[1:])))
+    except urllib.error.HTTPError as error:
+        try:
+            result = json.loads(error.read())
+        except ValueError:
+            result = {'error': 'API request rejected.'}
+        print(json.dumps(dict(result, status=error.code)))
+        sys.exit(1)
+    except (OSError, ValueError, TypeError) as error:
+        print(json.dumps({'error': str(error)}))
+        sys.exit(1)

@@ -52,9 +52,70 @@ let sending = false, noticeTimer;
 let savedSongs = [], libraryBusy = false, libraryRenderKey = '', libraryDirectory = '';
 let stationRenderKey = '';
 let audioContext, audioController, audioNextTime = 0, audioEpoch = null, desiredOutput = null;
+let browserId = null, browserRegistration, browserDesired = false, browserStatus = 'idle';
+let browserVolume = 1, audioGain, browserPollBusy = false, browserLeaving = false;
+let browserMutation = 0, audioGeneration = 0;
 let failedCoverSource = '';
 let settingsLoaded = false, settingsBusy = false, setupShown = false;
 const audioSources = new Set();
+async function browserRequest(operation, data) {
+  const response = await fetch('/api/clients/' + operation, {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Could not contact browser controls.');
+  return result;
+}
+async function registerBrowser() {
+  if (browserId) return;
+  if (!browserRegistration) browserRegistration = (async () => {
+    let name;
+    try { name = localStorage.getItem('pianobarBrowserName'); } catch (_) {}
+    const result = await browserRequest('register', {name: name || 'Browser · ' +
+      (navigator.userAgent.includes('Mobile') ? 'Mobile' : navigator.platform || 'Desktop')});
+    browserId = result.id;
+    $('browser-name').value = result.name;
+  })().finally(() => { browserRegistration = null; });
+  await browserRegistration;
+}
+async function updateBrowserAudio(enabled) {
+  ++browserMutation;
+  await registerBrowser();
+  await browserRequest('update', {id: browserId, enabled});
+  browserDesired = enabled;
+}
+async function pollBrowser() {
+  if (browserPollBusy || browserLeaving) return;
+  browserPollBusy = true;
+  const mutation = browserMutation;
+  try {
+    await registerBrowser();
+    const page = await browserRequest('heartbeat', {id: browserId, status: browserStatus,
+      ready: audioContext?.state === 'running'});
+    if (mutation !== browserMutation) return;
+    browserDesired = page.enabled;
+    browserVolume = page.volume;
+    if (document.activeElement !== $('browser-name')) $('browser-name').value = page.name;
+    if (audioGain) audioGain.gain.value = browserVolume;
+    if (!browserDesired) stopListening();
+    else if (!audioController && !snapshot.playerStopped && !snapshot.restarting && snapshot.state.output !== 'host') {
+      await startListening();
+    }
+  } catch (error) {
+    // Fail silent on a lost control connection, and obtain a fresh lease next time.
+    stopListening();
+    browserId = null;
+  } finally { browserPollBusy = false; }
+}
+setInterval(pollBrowser, 2000);
+queueMicrotask(pollBrowser);
+$('browser-name').addEventListener('change', async event => {
+  try {
+    await registerBrowser();
+    const page = await browserRequest('update', {id: browserId, name: event.target.value});
+    try { localStorage.setItem('pianobarBrowserName', page.name); } catch (_) {}
+  } catch (error) { notify(error.message); }
+});
 const labels = {
   act_help: 'Help & shortcuts', act_songlove: 'Love song', act_songban: 'Ban song',
   act_stationaddmusic: 'Add music', act_stationcreate: 'Create a station',
@@ -431,13 +492,13 @@ function clearAudioQueue() {
   audioNextTime = 0;
 }
 function stopListening() {
-  if (!audioController && !audioContext) return;
+  ++audioGeneration;
   if (audioController) audioController.abort();
   audioController = null;
   clearAudioQueue();
-  if (audioContext) audioContext.close().catch(() => {});
-  audioContext = null;
+  // Keep the user-activated context alive so remote routing can resume playback.
   audioEpoch = null;
+  browserStatus = 'idle';
   $('listen-button').textContent = 'Listen here';
   $('audio-status').textContent = '';
 }
@@ -455,25 +516,45 @@ function queueAudio(data, rate, channels, little, epoch) {
   if (audioNextTime < audioContext.currentTime) audioNextTime = audioContext.currentTime + .15;
   const source = audioContext.createBufferSource();
   source.buffer = buffer;
-  source.connect(audioContext.destination);
+  source.connect(audioGain);
   audioSources.add(source);
-  source.onended = () => audioSources.delete(source);
+  source.onended = () => {
+    audioSources.delete(source);
+    if (!audioSources.size && audioController) browserStatus = 'waiting';
+  };
   source.start(audioNextTime);
   audioNextTime += buffer.duration;
   $('audio-status').textContent = 'Playing in this browser';
+  browserStatus = 'playing';
 }
 async function startListening() {
   if (audioController) return;
+  const generation = audioGeneration;
   const Context = window.AudioContext || window.webkitAudioContext;
   if (!Context) throw new Error('This browser does not support audio playback.');
+  if (!audioContext || audioContext.state === 'closed') {
+    audioContext = new Context();
+    audioGain = audioContext.createGain();
+    audioGain.gain.value = browserVolume;
+    audioGain.connect(audioContext.destination);
+  }
+  // A remote request must not hang indefinitely on the browser's autoplay gate.
+  await Promise.race([audioContext.resume(), new Promise(resolve => setTimeout(resolve, 500))]);
+  if (audioContext.state !== 'running') {
+    browserStatus = 'blocked';
+    $('audio-status').textContent = 'Audio requested · click Listen here to allow playback';
+    return;
+  }
+  await registerBrowser();
+  if (audioController || browserLeaving || generation !== audioGeneration) return;
   const controller = audioController = new AbortController();
-  audioContext = new Context();
-  await audioContext.resume();
   if (controller.signal.aborted) return;
+  browserStatus = 'waiting';
   $('listen-button').textContent = 'Stop listening';
   $('audio-status').textContent = 'Waiting for audio…';
   (async () => {
-    const response = await fetch('/api/audio', {signal: controller.signal});
+    const response = await fetch('/api/audio', {signal: controller.signal,
+      headers: {'X-Pianobar-Client': browserId}});
     if (!response.ok) throw new Error('Could not start browser audio.');
     const reader = response.body.getReader();
     let pending = new Uint8Array(0);
@@ -504,7 +585,13 @@ async function chooseOutput(output) {
   desiredOutput = output;
   try {
     if (output === 'host') stopListening();
-    else await startListening();
+    else {
+      // Start the AudioContext within the click gesture before any network awaits.
+      const starting = startListening();
+      await updateBrowserAudio(true);
+      await starting;
+    }
+    if (output === 'host') await updateBrowserAudio(false);
     if (!await command({output})) desiredOutput = null;
   } catch (error) {
     desiredOutput = null;
@@ -514,10 +601,21 @@ async function chooseOutput(output) {
 }
 $('audio-output').addEventListener('change', event => chooseOutput(event.target.value));
 $('listen-button').addEventListener('click', () => {
-  if (audioController) stopListening();
+  if (audioController) {
+    stopListening();
+    updateBrowserAudio(false).catch(error => notify(error.message));
+  }
   else chooseOutput(snapshot.state.output === 'browser' ? 'browser' : 'both');
 });
-window.addEventListener('pagehide', stopListening);
+window.addEventListener('pagehide', () => {
+  browserLeaving = true;
+  stopListening();
+  if (audioContext) audioContext.close().catch(() => {});
+  if (browserId) fetch('/api/clients/unregister', {method: 'POST', keepalive: true,
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: browserId})}).catch(() => {});
+  browserId = null;
+});
+window.addEventListener('pageshow', () => { browserLeaving = false; pollBrowser(); });
 
 function followTranscript() {
   const transcript = $('transcript');

@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
     cache = base / 'songs'
     (cache / 'artwork').mkdir(parents=True)
     song = cache / ('a' * 64 + '.mka')
-    subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=60',
+    subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=120',
                     '-ac', '2', '-ar', '44100', '-c:a', 'aac', '-metadata', 'title=LAN audio',
                     '-metadata', 'artist=Test artist', '-metadata', 'album=Test album', str(song)], check=True)
     image_id = hashlib.sha256(b'Test artist\0Test album\0\0').hexdigest()
@@ -87,7 +87,9 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
         assert request('/api/library')['songs'][0]['cover'] == '/api/artwork/' + image_id
         assert state['state']['cachedCover'] == '/api/artwork/' + image_id
         stream = http.client.HTTPConnection('localhost', port, timeout=5)
-        stream.request('GET', '/api/audio', headers={'Authorization': auth})
+        client = request('/api/clients/register', {'name': 'PCM test'})
+        request('/api/clients/route', {'ids': [client['id']]})
+        stream.request('GET', '/api/audio', headers={'Authorization': auth, 'X-Pianobar-Client': client['id']})
         response = stream.getresponse()
         assert response.status == 200
         for _ in range(5):
@@ -99,6 +101,7 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
                 break
         else: raise AssertionError('No native PCM received')
         stream.close()
+        request('/api/clients/unregister', {'id': client['id']})
         request('/api/command', {'output': 'both'})
         wait_for(lambda s: s['state'].get('output') == 'both' and not s['pending'])
         deadline = time.monotonic() + 3
@@ -136,7 +139,7 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
                 page.get_by_role('button', name='Listen here', exact=True).click()
                 page.wait_for_function("() => document.getElementById('audio-status').textContent === 'Playing in this browser'")
                 assert page.evaluate('audioContext.state') == 'running'
-                assert page.evaluate('audioSources.size') > 0
+                page.wait_for_function('() => audioSources.size > 0')
                 wait_for(lambda s: not s['pending'])
                 other = browser.new_page(http_credentials={'username': 'pianobar', 'password': 'test-network-password'})
                 other.on('pageerror', lambda error: errors.append(str(error)))
@@ -144,6 +147,51 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
                 other.get_by_role('button', name='Listen here', exact=True).click()
                 other.wait_for_function('() => audioSources.size > 0')
                 page.wait_for_function('() => audioSources.size > 0')
+                first_id, second_id = page.evaluate('browserId'), other.evaluate('browserId')
+                assert first_id != second_id
+                request('/api/clients/update', {'id': first_id, 'name': 'Kitchen test', 'volume': .25})
+                page.wait_for_function('() => audioGain.gain.value === .25')
+                request('/api/clients/route', {'ids': [first_id]})
+                other.wait_for_function('() => audioController === null && audioSources.size === 0')
+                page.wait_for_function('() => audioSources.size > 0')
+                request('/api/clients/route', {'ids': [second_id]})
+                page.wait_for_function('() => audioController === null && audioSources.size === 0')
+                other.wait_for_function('() => audioSources.size > 0')
+                request('/api/clients/route', {'mode': 'none'})
+                other.wait_for_function('() => audioController === null && audioSources.size === 0')
+                request('/api/clients/route', {'mode': 'all'})
+                page.wait_for_function('() => audioSources.size > 0')
+                other.wait_for_function('() => audioSources.size > 0')
+                # A fresh page needs a gesture; desired routing is distinct from actual readiness.
+                blocked = browser.new_page(http_credentials={'username': 'pianobar', 'password': 'test-network-password'})
+                # Headless Chromium can allow autoplay. Deterministically model a
+                # browser that keeps resume() pending until a real click gesture.
+                blocked.add_init_script('''
+                    const NativeAudioContext = window.AudioContext;
+                    let audioClicked = false;
+                    document.addEventListener('pointerdown', () => { audioClicked = true; }, {once: true});
+                    window.AudioContext = class extends NativeAudioContext {
+                      constructor(...args) { super(...args); this.suspend(); }
+                      resume() {
+                        return audioClicked ? super.resume() : new Promise(() => {});
+                      }
+                    };
+                ''')
+                blocked.goto(origin)
+                blocked.wait_for_function('() => browserId !== null')
+                blocked_id = blocked.evaluate('browserId')
+                request('/api/clients/route', {'mode': 'all'})
+                blocked.wait_for_function("() => browserStatus === 'blocked'")
+                assert blocked.evaluate('audioSources.size') == 0
+                blocked.get_by_role('button', name='Listen here', exact=True).click()
+                blocked.wait_for_function('() => audioSources.size > 0')
+                blocked.goto('about:blank')
+                deadline = time.monotonic() + 5
+                while any(c['id'] == blocked_id for c in request('/api/clients')['clients']):
+                    assert time.monotonic() < deadline
+                    time.sleep(.1)
+                blocked.close()
+                print('PASS: registered pages, per-browser gain, one/many/none routing, remote resume, simulated autoplay blocking, disconnect')
                 other.get_by_role('button', name='Stop listening', exact=True).click()
                 assert other.evaluate('audioController') is None
                 page.wait_for_function('() => audioSources.size > 0')
