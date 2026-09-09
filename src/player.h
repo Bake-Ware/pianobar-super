@@ -38,6 +38,7 @@ THE SOFTWARE.
 #include <piano.h>
 
 #include "settings.h"
+#include "cache.h"
 
 typedef enum {
 	/* not running */
@@ -54,7 +55,8 @@ typedef struct {
 	/* public attributes protected by mutex */
 	pthread_mutex_t lock, aoplayLock;
 	pthread_cond_t cond, aoplayCond; /* broadcast changes to doPause */
-	bool doQuit, doPause;
+	bool doQuit, doPause, outputError;
+	unsigned int outputMode; /* 1: host, 2: browser, 3: both */
 
 	/* measured in seconds */
 	unsigned int songDuration;
@@ -76,8 +78,12 @@ typedef struct {
 	sig_atomic_t interrupted;
 
 	ao_device *aoDev;
+	int audioFd;
+	unsigned int audioEpoch;
 
 	/* settings (must be set before starting the thread) */
+	const PianoSong_t *song;
+	bool local;
 	double gain;
 	char *url;
 	const BarSettings_t *settings;
@@ -92,4 +98,3 @@ void BarPlayerInit (player_t * const p, const BarSettings_t * const settings);
 void BarPlayerReset (player_t * const p);
 void BarPlayerDestroy (player_t * const p);
 BarPlayerMode BarPlayerGetMode (player_t * const player);
-

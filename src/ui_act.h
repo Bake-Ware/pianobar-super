@@ -49,6 +49,7 @@ BarUiActCallback(BarUiActPause);
 BarUiActCallback(BarUiActTogglePause);
 BarUiActCallback(BarUiActRenameStation);
 BarUiActCallback(BarUiActSelectStation);
+void BarUiSwitchStation (BarApp_t *, PianoStation_t *);
 BarUiActCallback(BarUiActTempBanSong);
 BarUiActCallback(BarUiActPrintUpcoming);
 BarUiActCallback(BarUiActSelectQuickMix);
@@ -62,3 +63,7 @@ BarUiActCallback(BarUiActManageStation);
 BarUiActCallback(BarUiActVolReset);
 BarUiActCallback(BarUiActSettings);
 
+
+BarUiActCallback(BarUiActOffline);
+
+BarUiActCallback(BarUiActWeb);

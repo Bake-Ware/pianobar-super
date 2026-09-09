@@ -1,0 +1,29 @@
+[Unit]
+Description=Pianobar web and offline music player
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=pianobar
+Group=pianobar
+WorkingDirectory=/var/lib/pianobar
+Environment=XDG_CONFIG_HOME=/var/lib/pianobar/.config
+Environment=XDG_DATA_HOME=/var/lib/pianobar/.local/share
+Environment=LANG=C.UTF-8
+ExecStart=/usr/local/bin/pianobar --listen 127.0.0.1 --port 8765 --output browser
+Restart=always
+RestartSec=5
+StandardInput=null
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/pianobar
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+KillMode=mixed
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

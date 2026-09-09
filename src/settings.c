@@ -127,6 +127,7 @@ void BarSettingsDestroy (BarSettings_t *settings) {
 	free (settings->timeFormat);
 	free (settings->fifo);
 	free (settings->audioPipe);
+	free (settings->cacheDir);
 	free (settings->rpcHost);
 	free (settings->rpcTlsPort);
 	free (settings->partnerUser);
@@ -159,6 +160,15 @@ void BarSettingsRead (BarSettings_t *settings) {
 			sizeof (dispatchActions) / sizeof (*dispatchActions));
 
 	/* apply defaults */
+	settings->cacheSongs = true;
+	settings->offlineFallback = true;
+	const char *dataDir = getenv ("XDG_DATA_HOME");
+	if (dataDir != NULL && dataDir[0] == '/') {
+		settings->cacheDir = malloc (strlen (dataDir) + sizeof ("/pianobar/songs"));
+		sprintf (settings->cacheDir, "%s/pianobar/songs", dataDir);
+	} else {
+		settings->cacheDir = BarSettingsExpandTilde ("~/.local/share/pianobar/songs", userhome);
+	}
 	settings->audioQuality = PIANO_AQ_HIGH;
 	settings->autoselect = true;
 	settings->history = 5;
@@ -168,6 +178,7 @@ void BarSettingsRead (BarSettings_t *settings) {
 	/* should be > 4, otherwise expired audio urls (403) can stop playback */
 	settings->maxRetry = 5;
 	settings->bufferSecs = 5;
+	settings->audioBufferMs = 200;
 	settings->sortOrder = BAR_SORT_NAME_AZ;
 	settings->loveIcon = strdup (" <3");
 	settings->banIcon = strdup (" </3");
@@ -281,7 +292,16 @@ void BarSettingsRead (BarSettings_t *settings) {
 				--valend;
 			}
 
-			if (streq ("control_proxy", key)) {
+			if (streq ("cache_dir", key)) {
+				free (settings->cacheDir);
+				settings->cacheDir = BarSettingsExpandTilde (val, userhome);
+			} else if (streq ("cache_songs", key)) {
+				settings->cacheSongs = atoi (val) != 0;
+			} else if (streq ("offline", key)) {
+				settings->offline = atoi (val) != 0;
+			} else if (streq ("offline_fallback", key)) {
+				settings->offlineFallback = atoi (val) != 0;
+			} else if (streq ("control_proxy", key)) {
 				settings->controlProxy = strdup (val);
 			} else if (streq ("proxy", key)) {
 				settings->proxy = strdup (val);
@@ -349,6 +369,14 @@ void BarSettingsRead (BarSettings_t *settings) {
 				settings->maxRetry = atoi (val);
 			} else if (streq ("timeout", key)) {
 				settings->timeout = atoi (val);
+			} else if (streq ("audio_buffer_ms", key)) {
+				char *end;
+				long value = strtol (val, &end, 10);
+				if (*val != '\0' && *end == '\0' && value >= 0 && value <= 2000) {
+					settings->audioBufferMs = value;
+				} else {
+					BarUiMsg (settings, MSG_ERR, "audio_buffer_ms must be between 0 and 2000.\n");
+				}
 			} else if (streq ("buffer_seconds", key)) {
 				settings->bufferSecs = atoi (val);
 			} else if (streq ("sort", key)) {

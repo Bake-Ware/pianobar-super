@@ -11,11 +11,49 @@ pianobar \- console pandora.com music player
 
 .SH SYNOPSIS
 .B pianobar
+[--offline] [--cli] [--port PORT] [--listen ADDRESS]
+[--output host|browser|both] [--password-file PATH]
 
 .SH DESCRIPTION
 .B pianobar
 is a lightweight console music player for the personalized online radio
-pandora.com.
+pandora.com. A browser interface is hosted on localhost:8765 by default.
+Press W in the terminal to open the session in your default browser, or open
+http://localhost:8765/ directly. No link token is required.
+
+.SH OPTIONS
+.TP
+.B --offline
+Play the saved library without logging in. An empty library produces a message
+and exits. The library is shuffled on each pass.
+.TP
+.B --cli
+Disable the web server and use terminal controls only. Without this option,
+Python 3.9 or newer is required to host the browser interface. Audio plays on the
+host computer by default; choose Host, Browser, or Both in the web player.
+All CLI actions, including interactive questions, are available
+in the browser; custom keybindings are respected. The Library view lists and
+searches completed saved songs; Play starts the selected song locally, then
+continues with shuffled saved songs. The browser remembers the
+dark-mode preference in localStorage and displays activity behind the controls,
+with album art on the right.
+.TP
+.B --port PORT
+Choose the local web port. Cannot be combined with --cli.
+
+.TP
+.B --listen ADDRESS
+Bind the web interface to this IPv4 or IPv6 address. The default is 127.0.0.1;
+use 0.0.0.0 for LAN access. Network access requires HTTP Basic authentication,
+with username pianobar and a generated password printed in the terminal.
+.TP
+.B --password-file PATH
+Read the web access password from this file instead of generating one.
+.TP
+.B --output host|browser|both
+Choose the initial audio output. Browser mode works without a host audio device.
+Click Listen here in a browser to start audio there. Browser playback is buffered
+and is not synchronized with host playback in Both mode.
 
 .SH FILES
 .I $XDG_CONFIG_HOME/pianobar/config
@@ -45,6 +83,48 @@ key-bindings. Every one-byte character except for \\x00 and the
 special value
 .B disabled
 are allowed here.
+
+.PP
+The browser Settings page supports first-run Pandora sign-in, playback/cache
+preferences, and web access defaults. Save settings for the next start, or use
+Save & restart player to apply account/playback changes immediately. Wait for
+pending downloads before restarting. Web address/password changes require
+restarting pianobar. Explicit command-line flags override saved web defaults.
+Passwords are stored in owner-only config files and are never returned by the
+settings API. Leave password fields blank to retain existing credentials.
+.TP
+.B cache_songs = 1
+Save each loaded online song in an independent background download, without
+re-encoding. Skipping, pausing, or changing stations does not cancel the save.
+Existing completed copies and queued songs of the same metadata/quality are
+deduplicated. Two downloads run at once, with at most 64 active/waiting songs.
+Wait for pending saves to finish before exiting or disconnecting; quitting
+cancels unfinished downloads. Failed/partial files are not included in Library.
+Background saving uses a separate request from playback. No automatic storage
+limit or eviction is applied.
+.TP
+.B cache_dir = ~/.local/share/pianobar/songs
+Directory for saved Matroska audio (.mka) files. Defaults to
+$XDG_DATA_HOME/pianobar/songs when XDG_DATA_HOME is absolute. Supports ~/ expansion.
+Requires FFmpeg Matroska muxer/demuxer support. Disabling cache_songs does not
+disable playback of previously saved songs.
+.TP
+.B offline = 0
+Start in offline mode when set to 1. Network-dependent actions are unavailable.
+.TP
+.B offline_fallback = 1
+Switch to saved music on connection failures during login, playlist retrieval,
+or streaming. API connection failures use one attempt before fallback. Login
+fallback requires configured credentials. Authentication errors do not trigger
+fallback. Use act_offline to reconnect explicitly; a failed reconnect retains
+the local queue.
+.TP
+.B act_offline = O
+Switch to saved songs, or retry the online connection if already offline.
+.TP
+.B act_web = W
+Open the running web interface in the default browser. With --cli, report that
+the web server is disabled.
 
 .TP
 .B act_help = ?
@@ -209,6 +289,14 @@ It can be used as a replacement for
 in conjunction with OpenVPN's
 option
 .B route-nopull.
+
+.TP
+.B audio_buffer_ms = 200
+Output device buffering in milliseconds for ALSA, PulseAudio, and OSS. Larger
+values tolerate scheduling delays at the cost of slower control response.
+Accepts 0 through 2000; 0 retains the driver's defaults. Other drivers are
+unchanged. Separate from the decoded-stream buffer_seconds setting. Restart
+pianobar after changing this option.
 
 .TP
 .B buffer_seconds = 5

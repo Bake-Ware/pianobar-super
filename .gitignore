@@ -7,3 +7,26 @@ pianobar
 libpiano.a
 libpiano.so*
 waitress-test
+
+tests/player-driver
+
+__pycache__/
+
+tests/stations-driver
+
+# Private runtime configuration, credentials, and cached account data
+.env
+.env.*
+!.env.example
+/config
+/config.*
+/web.json
+/.config/
+/.local/
+/songs/
+/cache/
+*.pem
+*.key
+*.p12
+*.pfx
+*.log

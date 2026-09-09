@@ -45,6 +45,11 @@ typedef struct {
 	sig_atomic_t doQuit;
 	BarReadlineFds_t input;
 	unsigned int playerErrors;
+	bool offline, networkError;
+	int modeRequest; /* 1: offline, 2: reconnect, 3: selected saved song */
+	PianoSong_t *pendingLocalSong;
+	PianoStation_t offlineStation;
+	PianoStation_t *onlineStation;
 } BarApp_t;
 
 #include <signal.h>

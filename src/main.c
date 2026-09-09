@@ -56,6 +56,7 @@ THE SOFTWARE.
 #include "ui.h"
 #include "ui_dispatch.h"
 #include "ui_readline.h"
+#include "web.h"
 
 /*	authenticate user
  */
@@ -205,7 +206,35 @@ static void BarMainHandleUserInput (BarApp_t *app) {
 			BAR_RL_FULLRETURN | BAR_RL_NOECHO | BAR_RL_NOINT, 1) > 0) {
 		BarUiDispatch (app, buf[0], app->curStation, app->playlist, true,
 				BAR_DC_GLOBAL);
+		BarWebHandled ();
 	}
+}
+
+/* Called only while no player thread is using the current playlist. */
+static bool BarMainUseOfflinePlaylist (BarApp_t *app, PianoSong_t *songs) {
+	if (!app->offline) {
+		app->onlineStation = app->curStation != NULL ? app->curStation : app->nextStation;
+	}
+	PianoDestroyPlaylist (app->playlist);
+	app->playlist = songs;
+	app->offline = true;
+	app->networkError = false;
+	app->playerErrors = 0;
+	app->offlineStation.name = "Offline library";
+	app->offlineStation.id = "offline";
+	app->curStation = app->nextStation = &app->offlineStation;
+	BarUiMsg (&app->settings, MSG_INFO, "Offline mode: playing saved songs.\n");
+	return true;
+}
+
+static bool BarMainOffline (BarApp_t *app) {
+	PianoSong_t *songs = BarCacheLoad (&app->settings);
+	if (songs == NULL) {
+		BarUiMsg (&app->settings, MSG_ERR, "No saved songs available in %s.\n",
+				app->settings.cacheDir);
+		return false;
+	}
+	return BarMainUseOfflinePlaylist (app, songs);
 }
 
 /*	fetch new playlist
@@ -220,6 +249,9 @@ static void BarMainGetPlaylist (BarApp_t *app) {
 	BarUiMsg (&app->settings, MSG_INFO, "Receiving new playlist... ");
 	if (!BarUiPianoCall (app, PIANO_REQUEST_GET_PLAYLIST,
 			&reqData, &pRet, &wRet)) {
+		if (app->networkError && app->settings.offlineFallback && BarMainOffline (app)) {
+			return;
+		}
 		app->nextStation = NULL;
 	} else {
 		app->playlist = reqData.retPlaylist;
@@ -247,16 +279,18 @@ static void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
 			PianoFindStationById (app->ph.stations,
 			curSong->stationId) : NULL);
 
-	static const char httpPrefix[] = "http://";
-	/* avoid playing local files */
-	if (curSong->audioUrl == NULL ||
-			strncmp (curSong->audioUrl, httpPrefix, strlen (httpPrefix)) != 0) {
+	/* Remote playlists may only supply HTTP(S); local paths come from the cache. */
+	if (curSong->audioUrl == NULL || (!app->offline &&
+			strncmp (curSong->audioUrl, "http://", 7) != 0 &&
+			strncmp (curSong->audioUrl, "https://", 8) != 0)) {
 		BarUiMsg (&app->settings, MSG_ERR, "Invalid song url.\n");
 	} else {
 		player_t * const player = &app->player;
 		BarPlayerReset (player);
 
 		app->player.url = curSong->audioUrl;
+		app->player.song = curSong;
+		app->player.local = app->offline;
 		app->player.gain = curSong->fileGain;
 		app->player.songDuration = curSong->length;
 
@@ -272,8 +306,12 @@ static void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
 		 * thread has been started */
 		app->player.mode = PLAYER_WAITING;
 		/* start player */
-		pthread_create (playerThread, NULL, BarPlayerThread,
-				&app->player);
+		if (pthread_create (playerThread, NULL, BarPlayerThread, &app->player) != 0) {
+			app->player.mode = PLAYER_DEAD;
+			interrupted = &app->doQuit;
+			app->nextStation = NULL;
+			BarUiMsg (&app->settings, MSG_ERR, "Cannot start player thread.\n");
+		}
 	}
 }
 
@@ -294,6 +332,9 @@ static void BarMainPlayerCleanup (BarApp_t *app, pthread_t *playerThread) {
 		app->playerErrors = 0;
 	} else if (threadRet == (void *) PLAYER_RET_SOFTFAIL) {
 		++app->playerErrors;
+		if (!app->offline && !app->player.doQuit && app->settings.offlineFallback) {
+			app->modeRequest = 1;
+		}
 		if (app->playerErrors >= app->settings.maxRetry) {
 			/* don't continue playback if thread reports too many error */
 			app->nextStation = NULL;
@@ -348,64 +389,90 @@ static void BarMainPrintTime (BarApp_t *app) {
  */
 static void BarMainLoop (BarApp_t *app) {
 	pthread_t playerThread;
-
-	if (!BarMainGetLoginCredentials (&app->settings, &app->input)) {
-		return;
+	if (app->settings.offline) {
+		if (!BarMainOffline (app)) { return; }
+	} else {
+		if (!BarMainGetLoginCredentials (&app->settings, &app->input)) { return; }
+		if (!BarMainLoginUser (app) || !BarMainGetStations (app)) {
+			if (!app->networkError || !app->settings.offlineFallback ||
+					!BarMainOffline (app)) { return; }
+		} else {
+			BarMainGetInitialStation (app);
+		}
 	}
-
-	if (!BarMainLoginUser (app)) {
-		return;
-	}
-
-	if (!BarMainGetStations (app)) {
-		return;
-	}
-
-	BarMainGetInitialStation (app);
 
 	player_t * const player = &app->player;
-
+	bool started = false;
 	while (!app->doQuit) {
-		/* song finished playing, clean up things/scrobble song */
 		if (BarPlayerGetMode (player) == PLAYER_FINISHED) {
-			if (player->interrupted != 0) {
-				app->doQuit = 1;
-			}
+			if (player->interrupted != 0) { app->doQuit = 1; }
 			BarMainPlayerCleanup (app, &playerThread);
 		}
-
-		/* check whether player finished playing and start playing new
-		 * song */
 		if (BarPlayerGetMode (player) == PLAYER_DEAD) {
-			/* what's next? */
-			if (app->playlist != NULL) {
+			if (started && app->playlist != NULL) {
 				PianoSong_t *histsong = app->playlist;
 				app->playlist = PianoListNextP (app->playlist);
 				histsong->head.next = NULL;
 				BarUiHistoryPrepend (app, histsong);
 			}
-			if (app->playlist == NULL && app->nextStation != NULL && !app->doQuit) {
-				if (app->nextStation != app->curStation) {
-					BarUiPrintStation (&app->settings, app->nextStation);
+			started = false;
+			if (app->doQuit) { break; }
+			const int request = app->modeRequest;
+			app->modeRequest = 0;
+			if (request == 1) {
+				BarMainOffline (app);
+			} else if (request == 3 && app->pendingLocalSong != NULL) {
+				BarMainUseOfflinePlaylist (app, app->pendingLocalSong);
+				app->pendingLocalSong = NULL;
+				BarWebHandled ();
+			} else if (request == 2) {
+				/* Keep the local queue intact if reconnect fails. */
+				app->offline = false;
+				if (BarMainGetLoginCredentials (&app->settings, &app->input) &&
+						BarMainLoginUser (app)) {
+					/* Existing station pointers remain valid; initial offline launch
+					 * has no station list yet. */
+					if (app->ph.stations != NULL || BarMainGetStations (app)) {
+						PianoDestroyPlaylist (app->playlist);
+						app->playlist = NULL;
+						app->curStation = NULL;
+						app->nextStation = app->onlineStation;
+						BarMainGetInitialStation (app);
+					} else { app->offline = true; }
+				} else { app->offline = true; }
+				if (app->offline) {
+					app->networkError = false;
+					app->nextStation = &app->offlineStation;
+					BarUiMsg (&app->settings, MSG_INFO, "Reconnect failed; staying offline.\n");
 				}
-				BarMainGetPlaylist (app);
 			}
-			/* song ready to play */
-			if (app->playlist != NULL) {
+			if (app->playlist == NULL && app->nextStation != NULL) {
+				if (app->offline) {
+					app->playlist = BarCacheLoad (&app->settings);
+					if (app->playlist == NULL) {
+						app->nextStation = NULL;
+						BarUiMsg (&app->settings, MSG_ERR, "No saved songs available.\n");
+					}
+				} else {
+					if (app->nextStation != app->curStation) {
+						BarUiPrintStation (&app->settings, app->nextStation);
+					}
+					BarMainGetPlaylist (app);
+				}
+			}
+			if (app->playlist != NULL && app->nextStation != NULL) {
 				BarMainStartPlayback (app, &playerThread);
+				started = true;
 			}
 		}
-
+		BarWebState (app);
+		BarWebPoll (app);
 		BarMainHandleUserInput (app);
-
-		/* show time */
-		if (BarPlayerGetMode (player) == PLAYER_PLAYING) {
-			BarMainPrintTime (app);
-		}
+		if (BarPlayerGetMode (player) == PLAYER_PLAYING) { BarMainPrintTime (app); }
 	}
-
 	if (BarPlayerGetMode (player) != PLAYER_DEAD) {
 		pthread_join (playerThread, NULL);
+		interrupted = &app->doQuit;
 	}
 }
 
@@ -429,7 +496,50 @@ static void BarMainSetupSigaction () {
 
 int main (int argc, char **argv) {
 	static BarApp_t app;
-
+	/* Read-only library scans run in a separate process, away from audio. */
+	if (argc == 3 && strcmp (argv[1], "--list-saved") == 0) {
+		return BarWebListSaved (argv[2]);
+	}
+	bool offline = false, cli = false, port = false;
+	for (int i = 1; i < argc; ++i) {
+		if (strcmp (argv[i], "--offline") == 0) { offline = true; }
+		else if (strcmp (argv[i], "--cli") == 0) { cli = true; }
+		else if ((strcmp (argv[i], "--port") == 0 || strcmp (argv[i], "--listen") == 0 ||
+			strcmp (argv[i], "--password-file") == 0 || strcmp (argv[i], "--output") == 0) && i + 1 < argc) {
+			port = true;
+			++i; /* The web host validates the port value. */
+		} else if (strcmp (argv[i], "--help") == 0 || strcmp (argv[i], "-h") == 0) {
+			puts ("Usage: pianobar [--offline] [--cli] [--port PORT] [--listen ADDRESS] [--output host|browser|both]\n"
+					"  Web interface enabled by default on localhost:8765.\n"
+					"  --offline  Play saved songs without logging in.\n"
+					"  --cli      Disable the web server (terminal only).\n"
+					"  --port     Choose the web server port.\n"
+					"  --listen   Bind the web server to an address (e.g. 0.0.0.0 for LAN).\n"
+					"  --output   Start with host, browser, or both audio outputs.\n"
+					"  --password-file  Read the network access password from a file.\n"
+					"  Press W in the player to open the web interface.");
+			return 0;
+		} else {
+			fprintf (stderr, "Unknown or incomplete option: %s\n", argv[i]);
+			return 1;
+		}
+	}
+	if (cli && port) {
+		fputs ("Web options cannot be used with --cli.\n", stderr);
+		return 1;
+	}
+	/* The host starts the native child with --cli to avoid recursion. */
+	if (!cli) {
+		char *helper = malloc (strlen (argv[0]) + 5);
+		if (helper == NULL) { return 1; }
+		sprintf (helper, "%s-web", argv[0]);
+		argv[0] = helper;
+		execvp (helper, argv);
+		perror ("Cannot start pianobar-web (requires Python 3; use --cli for terminal only)");
+		free (helper);
+		return 1;
+	}
+	srand ((unsigned int) time (NULL) ^ (unsigned int) getpid ());
 	debugEnable();
 
 	memset (&app, 0, sizeof (app));
@@ -450,6 +560,7 @@ int main (int argc, char **argv) {
 
 	BarSettingsInit (&app.settings);
 	BarSettingsRead (&app.settings);
+	app.settings.offline |= offline;
 
 	PianoReturn_t pret;
 	if ((pret = PianoInit (&app.ph, app.settings.partnerUser,
@@ -501,6 +612,8 @@ int main (int argc, char **argv) {
 			app.input.fds[1];
 	++app.input.maxfd;
 
+	BarWebInit ();
+	BarWebState (&app);
 	BarMainLoop (&app);
 
 	if (app.input.fds[1] != -1) {
@@ -508,12 +621,15 @@ int main (int argc, char **argv) {
 	}
 
 	/* write statefile */
-	BarSettingsWrite (app.curStation, &app.settings);
+	BarSettingsWrite (app.offline ? app.onlineStation : app.curStation, &app.settings);
 
+	BarCacheDownloadsShutdown (true);
 	PianoDestroy (&app.ph);
 	PianoDestroyPlaylist (app.songHistory);
 	PianoDestroyPlaylist (app.playlist);
+	PianoDestroyPlaylist (app.pendingLocalSong);
 	curl_easy_cleanup (app.http);
+	BarCacheArtworkWait ();
 	curl_global_cleanup ();
 	BarPlayerDestroy (&app.player);
 	BarSettingsDestroy (&app.settings);
@@ -523,4 +639,3 @@ int main (int argc, char **argv) {
 
 	return 0;
 }
-

@@ -21,6 +21,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
 
+#include "config.h"
+#include "web.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -71,6 +73,9 @@ size_t BarReadline (char *buf, const size_t bufSize, const char *mask,
 		interrupted = &localInt;
 	}
 
+	if (timeout == -1) {
+		BarWebPrompt (true, !echo, !(flags & BAR_RL_FULLRETURN), bufSize - 1, mask);
+	}
 	memset (buf, 0, bufSize);
 
 	/* if fd is a fifo fgetc will always return EOF if nobody writes to
@@ -200,6 +205,7 @@ size_t BarReadline (char *buf, const size_t bufSize, const char *mask,
 	interrupted = prevInt;
 
 	buf[bufLen] = '\0';
+	if (timeout == -1) { BarWebPrompt (false, false, false, 0, NULL); }
 	return bufLen;
 }
 

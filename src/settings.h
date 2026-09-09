@@ -60,7 +60,9 @@ typedef enum {
 	BAR_KS_VOLRESET = 28,
 	BAR_KS_SETTINGS = 29,
 	/* insert new shortcuts _before_ this element and increase its value */
-	BAR_KS_COUNT = 30,
+	BAR_KS_OFFLINE = 30,
+	BAR_KS_WEB = 31,
+	BAR_KS_COUNT = 32,
 } BarKeyShortcutId_t;
 
 #define BAR_KS_DISABLED '\x00'
@@ -84,7 +86,9 @@ typedef struct {
 
 typedef struct {
 	bool autoselect;
-	unsigned int history, maxRetry, timeout, bufferSecs;
+	bool cacheSongs, offline, offlineFallback;
+	char *cacheDir;
+	unsigned int history, maxRetry, timeout, bufferSecs, audioBufferMs;
 	int volume;
 	float gainMul;
 	BarStationSorting_t sortOrder;

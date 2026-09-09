@@ -48,6 +48,10 @@ BarKeyShortcutId_t BarUiDispatch (BarApp_t *app, const char key, PianoStation_t 
 	for (size_t i = 0; i < BAR_KS_COUNT; i++) {
 		if (app->settings.keys[i] != BAR_KS_DISABLED &&
 				app->settings.keys[i] == key) {
+			if (app->offline && !BarUiOfflineAction (i)) {
+				BarUiMsg (&app->settings, MSG_INFO, "This command is unavailable offline.\n");
+				return BAR_KS_COUNT;
+			}
 			if ((dispatchActions[i].context & context) == dispatchActions[i].context) {
 				assert (dispatchActions[i].function != NULL);
 
@@ -69,3 +73,15 @@ BarKeyShortcutId_t BarUiDispatch (BarApp_t *app, const char key, PianoStation_t 
 	return BAR_KS_COUNT;
 }
 
+
+bool BarUiOfflineAction (BarKeyShortcutId_t action) {
+	switch (action) {
+		case BAR_KS_HELP: case BAR_KS_INFO: case BAR_KS_SKIP:
+		case BAR_KS_PLAYPAUSE: case BAR_KS_PLAYPAUSE2: case BAR_KS_PLAY:
+		case BAR_KS_PAUSE: case BAR_KS_QUIT: case BAR_KS_UPCOMING:
+		case BAR_KS_VOLDOWN: case BAR_KS_VOLUP: case BAR_KS_VOLRESET:
+		case BAR_KS_OFFLINE: case BAR_KS_WEB:
+			return true;
+		default: return false;
+	}
+}

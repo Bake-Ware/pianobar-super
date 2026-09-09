@@ -32,6 +32,7 @@ THE SOFTWARE.
 #include <string.h>
 
 #include "ui.h"
+#include "web.h"
 #include "ui_readline.h"
 #include "ui_dispatch.h"
 
@@ -89,7 +90,8 @@ static int BarTransformIfShared (BarApp_t *app, PianoStation_t *station) {
 BarUiActCallback(BarUiActHelp) {
 	BarUiMsg (&app->settings, MSG_NONE, "\r");
 	for (size_t i = 0; i < BAR_KS_COUNT; i++) {
-		if (dispatchActions[i].helpText != NULL &&
+		if ((!app->offline || BarUiOfflineAction (i)) &&
+				dispatchActions[i].helpText != NULL &&
 				(context & dispatchActions[i].context) == dispatchActions[i].context &&
 				app->settings.keys[i] != BAR_KS_DISABLED) {
 			BarUiMsg (&app->settings, MSG_LIST, "%c    %s\n", app->settings.keys[i],
@@ -243,7 +245,10 @@ BarUiActCallback(BarUiActDeleteStation) {
 
 	BarUiMsg (&app->settings, MSG_QUESTION, "Really delete \"%s\"? [yN] ",
 			selStation->name);
-	if (BarReadlineYesNo (false, &app->input)) {
+	BarWebDeleteConfirmation (selStation->name);
+	const bool confirmed = BarReadlineYesNo (false, &app->input);
+	BarWebDeleteConfirmation (NULL);
+	if (confirmed) {
 		BarUiMsg (&app->settings, MSG_INFO, "Deleting station... ");
 		if (BarUiActDefaultPianoCall (PIANO_REQUEST_DELETE_STATION,
 				selStation) && selStation == app->curStation) {
@@ -480,12 +485,16 @@ BarUiActCallback(BarUiActRenameStation) {
 
 /*	play another station
  */
+void BarUiSwitchStation (BarApp_t *app, PianoStation_t *station) {
+	app->nextStation = station;
+	drainPlaylist (app);
+}
+
 BarUiActCallback(BarUiActSelectStation) {
 	PianoStation_t *newStation = BarUiSelectStation (app, app->ph.stations,
 			"Select station: ", NULL, app->settings.autoselect);
 	if (newStation != NULL) {
-		app->nextStation = newStation;
-		drainPlaylist (app);
+		BarUiSwitchStation (app, newStation);
 	}
 }
 
@@ -937,4 +946,15 @@ BarUiActCallback(BarUiActManageStation) {
 	}
 
 	PianoDestroyStationInfo (&reqData.info);
+}
+
+BarUiActCallback(BarUiActOffline) {
+	app->modeRequest = app->offline ? 2 : 1;
+	BarUiDoSkipSong (&app->player);
+}
+
+BarUiActCallback(BarUiActWeb) {
+	BarUiMsg (&app->settings, MSG_INFO, BarWebOpen () ?
+			"Opening web interface in your browser.\n" :
+			"Web server is disabled. Restart without --cli to enable it.\n");
 }

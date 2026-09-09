@@ -104,6 +104,10 @@ static const BarUiDispatchAction_t dispatchActions[BAR_KS_COUNT] = {
 				"act_volreset"},
 		{'!', BAR_DC_GLOBAL, BarUiActSettings, "change settings",
 				"act_settings"},
+		{'O', BAR_DC_GLOBAL, BarUiActOffline, "toggle offline mode / reconnect",
+				"act_offline"},
+		{'W', BAR_DC_GLOBAL, BarUiActWeb, "open web interface in browser",
+				"act_web"},
 		};
 
 #include <piano.h>
@@ -113,3 +117,5 @@ static const BarUiDispatchAction_t dispatchActions[BAR_KS_COUNT] = {
 BarKeyShortcutId_t BarUiDispatch (BarApp_t *, const char, PianoStation_t *, PianoSong_t *,
 		const bool, BarUiDispatchContext_t);
 
+
+bool BarUiOfflineAction (BarKeyShortcutId_t);

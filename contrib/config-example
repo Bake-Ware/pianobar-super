@@ -38,6 +38,8 @@
 #act_voldown = (
 #act_volup = )
 #act_volreset = ^
+#act_offline = O
+#act_web = W
 
 # Misc
 #audio_quality = low
@@ -50,6 +52,7 @@
 #gain_mul = 1.0
 #sample_rate = 44100
 #audio_pipe = /tmp/mypipe
+#audio_buffer_ms = 200
 
 # Format strings
 #format_nowplaying_song = [32m%t[0m by [34m%a[0m on %l[31m%r[0m%@%s
@@ -68,3 +71,13 @@
 #encrypt_password = 2%3WCL*JU$MP]4
 #decrypt_password = U#IO$RZPAB%VX2
 
+
+# Local song library and offline playback (saving and fallback enabled by default)
+# Loaded songs save in the background, even after skipping or pausing.
+# Wait for pending saves before quitting or disconnecting.
+#cache_songs = 1
+#cache_dir = ~/.local/share/pianobar/songs
+#offline = 0
+#offline_fallback = 1
+# The web server is on by default; press W to open it in your browser.
+# Use --cli to disable the web server, --offline for local playback.

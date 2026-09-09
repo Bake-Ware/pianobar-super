@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#172b2b">
+  <title>pianobar</title>
+  <link id="favicon" rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="sidebar-scroll">
+    <a class="brand" href="/" aria-label="pianobar home"><span class="brand-mark"><i></i><i></i><i></i><i></i></span>pianobar<span class="brand-dot">.</span></a>
+    <p class="eyebrow sidebar-label">YOUR LISTENING ROOM</p>
+    <a class="nav active" href="#player" data-view="player" aria-current="page"><span id="nav-player-icon" aria-hidden="true">◉</span><img id="nav-cover" alt="" hidden> Now playing</a>
+    <a class="nav" href="#stations" data-view="stations"><span>≋</span> Stations</a>
+    <a class="nav" href="#library" data-view="library"><span>▤</span> Library</a>
+    <a class="nav" href="#settings" data-view="settings"><span>⚙</span> Settings</a>
+    <div class="sidebar-controls" data-views="player stations library">
+      <details id="station-controls" class="sidebar-group"><summary>Find your next favorite</summary><p>Shape the station. Follow your curiosity.</p><div id="station-actions" class="action-grid"></div></details>
+      <details id="library-controls" data-views="player stations" class="sidebar-group"><summary>Make it yours</summary><p>Keep the good ones close, even offline.</p><div id="library-actions" class="action-grid"></div></details>
+    </div>
+    <div class="sidebar-bottom"><span class="little-record"></span><p>A little radio.<br>A lot of possibility.</p><small>Made for listening.</small></div>
+    </div>
+    <span id="connection" class="connection">Connecting…</span>
+  </aside>
+  <main>
+    <header><div class="breadcrumb" aria-label="Current station and track"><span id="station">No station selected</span><span class="breadcrumb-separator" aria-hidden="true">/</span><b id="current-track">Nothing playing</b></div><div class="header-actions"><button data-action="act_stationchange" class="mode-button" disabled>Change station</button><button id="mode-button" class="mode-button" data-action="act_offline" disabled>Go offline</button><button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">Dark mode</button></div></header>
+    <section id="player" data-views="player" class="player-card" aria-label="Music player">
+      <div class="artwork" id="artwork"><div class="record"><div class="record-label"><span>p</span><small>PIANOBAR RADIO</small></div></div><img id="cover" alt="Album artwork" hidden><span class="art-label">THE EVERYDAY SOUNDTRACK</span></div>
+      <div class="player-content">
+        <aside id="activity" data-views="player" class="activity-backdrop" aria-label="Player activity"><pre id="transcript" aria-label="Player output"></pre></aside>
+        <div class="player-controls"><div class="on-air"><span></span><span id="source">YOUR PERSONAL RADIO</span></div><h2 id="title">Something good is next.</h2><p id="artist" class="artist">Connect to your station and make yourself at home.</p><p id="album" class="album"></p>
+        <div class="progress-wrap"><progress id="progress" max="1" value="0" aria-label="Song progress"></progress><div class="times"><span id="elapsed">0:00</span><span id="duration">0:00</span></div></div>
+        <div class="transport"><div class="transport-main"><button class="icon-button" data-action="act_songlove" aria-label="Love song" title="Love song" disabled>♡</button><button id="play-button" class="play-button" data-action="act_songpausetoggle" aria-label="Pause playback" disabled>Ⅱ</button><button class="icon-button skip" data-action="act_songnext" aria-label="Next song" title="Next song" disabled><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16l11-8zM18 4h3v16h-3z"/></svg></button></div><div class="volume"><button data-action="act_voldown" aria-label="Decrease volume" disabled>−</button><span id="volume">0 dB</span><button data-action="act_volup" aria-label="Increase volume" disabled>+</button></div></div>
+        <div class="track-actions"><button data-action="act_songban" disabled>⊘ Ban track</button><button data-action="act_songtired" disabled>◷ Take a break</button><button data-action="act_bookmark" disabled>＋ Bookmark</button></div>
+        <div class="audio-output"><label for="audio-output">Audio output</label><select id="audio-output"><option value="host">Host</option><option value="browser">Browser</option><option value="both">Both</option></select><button id="listen-button" type="button">Listen here</button><span id="audio-status" role="status"></span></div>
+        <section class="utility"><details><summary>More controls <span>+</span></summary><div id="more-actions" class="more-actions"></div></details></section>
+        </div>
+      </div>
+    </section>
+    <section id="shortcut-legend" data-views="player" class="shortcut-legend" aria-labelledby="shortcuts-title">
+      <details><summary id="shortcuts-title">Keyboard shortcuts <span>+</span></summary>
+      <p>Use your pianobar keys anywhere outside text fields and dialogs. Faded shortcuts are unavailable right now.</p>
+      <div id="shortcut-list" class="shortcut-list"></div></details>
+    </section>
+    <section id="stations-page" data-views="stations" class="control-card" aria-labelledby="stations-title">
+      <div class="section-heading"><h1 id="stations-title">Stations</h1></div>
+      <p id="stations-message">Choose a station or discover something new.</p>
+      <label class="search-label" for="station-search">Search your stations</label>
+      <input id="station-search" type="search" placeholder="Station name…" autocomplete="off">
+      <p id="station-list-message" role="status"></p><div id="station-list"></div>
+      <details class="station-management"><summary>Manage stations <span>+</span></summary><div id="station-page-actions" class="action-grid"></div></details>
+    </section>
+    <section id="saved-library" data-views="library" class="saved-library control-card" aria-labelledby="saved-title"><div class="saved-heading"><div><p class="eyebrow">AVAILABLE OFFLINE</p><h3 id="saved-title">Saved songs <span id="saved-count">0</span></h3></div><button id="refresh-library" type="button">Refresh</button></div><label class="search-label" for="library-search">Search your saved music</label><input id="library-search" type="search" placeholder="Song, artist, or album…" autocomplete="off"><p id="library-message" role="status">Open Library to see your saved songs.</p><div id="saved-songs"></div></section>
+    <section id="settings-page" data-views="settings" class="control-card" aria-labelledby="settings-title">
+      <p class="eyebrow">YOUR PLAYER, YOUR WAY</p><h1 id="settings-title">Settings</h1>
+      <p id="setup-message" hidden>Add your Pandora account to start listening, or choose offline startup to use a saved library.</p>
+      <form id="settings-form">
+        <fieldset><legend>Pandora account</legend><div class="settings-grid">
+          <label>Email<input id="setting-user" type="email" autocomplete="username" maxlength="450"></label>
+          <label>Password<input id="setting-password" type="password" autocomplete="new-password" maxlength="450" placeholder="Enter your Pandora password"></label>
+        </div><p id="account-password-note" class="settings-hint">Your password is stored in your private pianobar config file.</p>
+        <label class="setting-check"><input id="setting-clearPassword" type="checkbox">Forget saved Pandora credentials</label></fieldset>
+        <fieldset><legend>Listening &amp; offline library</legend><div class="settings-grid">
+          <label>Library folder<input id="setting-cache_dir" autocomplete="off" required></label>
+          <label>Audio quality<select id="setting-audio_quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+          <label>Audio buffer (ms)<input id="setting-audio_buffer_ms" type="number" min="0" max="2000" required></label>
+          <label>Default audio output<select id="setting-output"><option value="host">Host</option><option value="browser">Browser</option><option value="both">Both</option></select></label>
+        </div><div class="settings-checks">
+          <label class="setting-check"><input id="setting-cache_songs" type="checkbox">Save loaded songs automatically</label>
+          <label class="setting-check"><input id="setting-offline_fallback" type="checkbox">Use saved songs when the connection fails</label>
+          <label class="setting-check"><input id="setting-offline" type="checkbox">Start in offline mode</label>
+        </div></fieldset>
+        <fieldset><legend>Web access</legend><p class="settings-hint">Use 127.0.0.1 for this computer or 0.0.0.0 for your network. Network login uses the username <b>pianobar</b>.</p><div class="settings-grid">
+          <label>Listen address<input id="setting-listen" autocomplete="off" required></label>
+          <label>Port<input id="setting-port" type="number" min="1" max="65535" required></label>
+          <label>Web access password<input id="setting-web-password" type="password" autocomplete="new-password" maxlength="450"></label>
+        </div><p id="web-password-note" class="settings-hint"></p><p class="settings-hint">Web address and password changes take effect after restarting pianobar. Network access uses HTTP; use it on a trusted network.</p></fieldset>
+        <div class="settings-buttons"><button id="save-settings" type="submit" value="save">Save settings</button><button id="apply-settings" type="submit" value="apply">Save &amp; restart player</button></div>
+        <p id="settings-status" role="status">Changes apply when the player restarts. Restarting interrupts playback.</p>
+      </form>
+    </section>
+    <footer><span id="cache-note">Songs save automatically when loaded.</span><span>Good music. Your pace.</span></footer>
+  </main>
+  <div id="notice" role="status" hidden></div>
+  <dialog id="prompt-dialog" aria-labelledby="prompt-title"><div class="dialog-heading"><div><p class="eyebrow">KEEP THE MUSIC PERSONAL</p><h2 id="prompt-title">One more thing…</h2></div><span class="prompt-badge">PLAYER REQUEST</span></div><p class="dialog-hint">Choose an option or type your answer below.</p><p id="delete-confirmation" hidden></p><pre id="prompt-output"></pre><div id="prompt-options"></div><form id="prompt-form"><label for="answer" id="answer-label">Your answer</label><div class="answer-row"><input id="answer" autocomplete="off" spellcheck="false"><button class="submit-button" type="submit">Continue ↗</button></div></form><p class="dialog-footnote">All station, discovery, and account actions are available here.</p></dialog>
+</body>
+</html>

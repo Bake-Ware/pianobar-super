@@ -226,9 +226,9 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 	setAndCheck (CURLOPT_WRITEDATA, &buffer);
 	setAndCheck (CURLOPT_XFERINFOFUNCTION, progressCb);
 	setAndCheck (CURLOPT_XFERINFODATA, &lint);
-	setAndCheck (CURLOPT_NOPROGRESS, 0);
-	setAndCheck (CURLOPT_POST, 1);
-	setAndCheck (CURLOPT_TIMEOUT, settings->timeout);
+	setAndCheck (CURLOPT_NOPROGRESS, 0L);
+	setAndCheck (CURLOPT_POST, 1L);
+	setAndCheck (CURLOPT_TIMEOUT, (long) settings->timeout);
 	if (settings->caBundle != NULL) {
 		setAndCheck (CURLOPT_CAINFO, settings->caBundle);
 	}
@@ -273,7 +273,7 @@ static CURLcode BarPianoHttpRequest (CURL * const http,
 			free (buffer.data);
 			buffer.data = NULL;
 			buffer.pos = 0;
-			if (retry >= settings->maxRetry) {
+			if (settings->offlineFallback || retry >= settings->maxRetry) {
 				break;
 			}
 		} else {
@@ -299,6 +299,13 @@ bool BarUiPianoCall (BarApp_t * const app, const PianoRequestType_t type,
 	PianoReturn_t pRetLocal = PIANO_RET_OK;
 	CURLcode wRetLocal = CURLE_OK;
 	bool ret = false;
+	app->networkError = false;
+	if (app->offline) {
+		BarUiMsg (&app->settings, MSG_ERR, "This command requires an online connection.\n");
+		*pRet = PIANO_RET_ERR;
+		*wRet = CURLE_COULDNT_CONNECT;
+		return false;
+	}
 
 	/* repeat as long as there are http requests to do */
 	do {
@@ -358,6 +365,7 @@ cleanup:
 		PianoDestroyRequest (&req);
 	} while (pRetLocal == PIANO_RET_CONTINUE_REQUEST);
 
+	app->networkError = temporaryCurlError (wRetLocal);
 	*pRet = pRetLocal;
 	*wRet = wRetLocal;
 

@@ -44,6 +44,8 @@ THE SOFTWARE.
 #include <inttypes.h>
 #include <arpa/inet.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <time.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
@@ -92,8 +94,26 @@ void BarPlayerInit (player_t * const p, const BarSettings_t * const settings) {
 	pthread_cond_init (&p->cond, NULL);
 	pthread_mutex_init (&p->aoplayLock, NULL);
 	pthread_cond_init (&p->aoplayCond, NULL);
+	p->audioEpoch = 0;
 	BarPlayerReset (p);
 	p->settings = settings;
+	p->audioFd = -1;
+	p->outputMode = 1;
+	const char *fd = getenv ("PIANOBAR_AUDIO_FD");
+	if (fd != NULL) {
+		char *end;
+		long value = strtol (fd, &end, 10);
+		if (*end == '\0' && value >= 3 && value <= 1024) {
+			p->audioFd = value;
+			fcntl (p->audioFd, F_SETFL, fcntl (p->audioFd, F_GETFL) | O_NONBLOCK);
+			fcntl (p->audioFd, F_SETFD, FD_CLOEXEC);
+		}
+	}
+	const char *output = getenv ("PIANOBAR_OUTPUT");
+	if (p->audioFd >= 0 && output != NULL) {
+		if (strcmp (output, "browser") == 0) { p->outputMode = 2; }
+		else if (strcmp (output, "both") == 0) { p->outputMode = 3; }
+	}
 }
 
 void BarPlayerDestroy (player_t * const p) {
@@ -109,8 +129,10 @@ void BarPlayerDestroy (player_t * const p) {
 }
 
 void BarPlayerReset (player_t * const p) {
+	++p->audioEpoch;
 	p->doQuit = false;
 	p->doPause = false;
+	p->outputError = false;
 	p->songDuration = 0;
 	p->songPlayed = 0;
 	p->mode = PLAYER_DEAD;
@@ -125,6 +147,8 @@ void BarPlayerReset (player_t * const p) {
 	p->lastTimestamp = 0;
 	p->interrupted = 0;
 	p->aoDev = NULL;
+	p->song = NULL;
+	p->local = false;
 }
 
 /*	Update volume filter
@@ -132,7 +156,10 @@ void BarPlayerReset (player_t * const p) {
 void BarPlayerSetVolume (player_t * const player) {
 	assert (player != NULL);
 
-	if (player->mode != PLAYER_PLAYING) {
+	/* Graph commands must not race decoding, resampling, or graph teardown. */
+	pthread_mutex_lock (&player->aoplayLock);
+	if (BarPlayerGetMode (player) != PLAYER_PLAYING) {
+		pthread_mutex_unlock (&player->aoplayLock);
 		return;
 	}
 
@@ -157,6 +184,7 @@ void BarPlayerSetVolume (player_t * const player) {
 #endif
 		printError (player->settings, "Cannot set volume", ret);
 	}
+	pthread_mutex_unlock (&player->aoplayLock);
 }
 
 #define softfail(msg) \
@@ -168,6 +196,10 @@ void BarPlayerSetVolume (player_t * const player) {
 static int intCb (void * const data) {
 	player_t * const player = data;
 	assert (player != NULL);
+	pthread_mutex_lock (&player->lock);
+	const bool quit = player->doQuit;
+	pthread_mutex_unlock (&player->lock);
+	if (quit) { return 1; }
 	if (player->interrupted > 1) {
 		/* got a sigint multiple times, quit pianobar (handled by main.c). */
 		pthread_mutex_lock (&player->lock);
@@ -201,10 +233,15 @@ static bool openStream (player_t * const player) {
 	ret = snprintf (timeoutStr, sizeof (timeoutStr), "%lu", timeout);
 	assert (ret < sizeof (timeoutStr));
 	AVDictionary *options = NULL;
-	av_dict_set (&options, "timeout", timeoutStr, 0);
+	av_dict_set (&options, "rw_timeout", timeoutStr, 0);
+	av_dict_set (&options, "protocol_whitelist",
+			player->local ? "file" : "http,https,tcp,tls,crypto", 0);
 
 	assert (player->url != NULL);
-	if ((ret = avformat_open_input (&player->fctx, player->url, NULL, &options)) < 0) {
+	ret = avformat_open_input (&player->fctx, player->url,
+			player->local ? av_find_input_format ("matroska") : NULL, &options);
+	av_dict_free (&options);
+	if (ret < 0) {
 		softfail ("Unable to open audio file");
 	}
 
@@ -234,6 +271,14 @@ static bool openStream (player_t * const player) {
 	if ((ret = avcodec_parameters_to_context (player->cctx, cp)) < 0) {
 		softfail ("avcodec_parameters_to_context");
 	}
+	/* Older FFmpeg demuxers may report only a channel count (notably for
+	 * cached Matroska audio). The resampler needs a concrete layout. */
+	if (player->cctx->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC &&
+			player->cctx->ch_layout.nb_channels > 0) {
+		const int channels = player->cctx->ch_layout.nb_channels;
+		av_channel_layout_uninit (&player->cctx->ch_layout);
+		av_channel_layout_default (&player->cctx->ch_layout, channels);
+	}
 
 	const AVCodec * const decoder = avcodec_find_decoder (cp->codec_id);
 	if (decoder == NULL) {
@@ -248,8 +293,10 @@ static bool openStream (player_t * const player) {
 		av_seek_frame (player->fctx, player->streamIdx, player->lastTimestamp, 0);
 	}
 
-	const unsigned int songDuration = av_q2d (player->st->time_base) *
-			(double) player->st->duration;
+	const unsigned int songDuration = player->st->duration > 0 ?
+			av_q2d (player->st->time_base) * (double) player->st->duration :
+			(player->fctx->duration > 0 ? player->fctx->duration / AV_TIME_BASE :
+			player->songDuration);
 	pthread_mutex_lock (&player->lock);
 	player->songPlayed = 0;
 	player->songDuration = songDuration;
@@ -336,6 +383,10 @@ static bool openFilter (player_t * const player) {
 /*	setup libao
  */
 static bool openDevice (player_t * const player) {
+	pthread_mutex_lock (&player->lock);
+	const bool host = (player->outputMode & 1) != 0;
+	pthread_mutex_unlock (&player->lock);
+	if (!host) { return true; }
 	const AVCodecParameters * const cp = player->st->codecpar;
 
 	ao_sample_format aoFmt;
@@ -366,8 +417,29 @@ static bool openDevice (player_t * const player) {
 	} else {
 		// use driver from libao configuration
 		driver = ao_default_driver_id ();
-		if ((player->aoDev = ao_open_live (driver, &aoFmt, NULL)) == NULL) {
+		ao_option *options = NULL;
+		const ao_info *info = ao_driver_info (driver);
+		/* Libao's ALSA default uses a 20 ms buffer / 5 ms periods. A radio
+		 * player can trade a little control latency for resistance to dropouts. */
+		if (player->settings->audioBufferMs > 0 && info != NULL &&
+				(strcmp (info->short_name, "alsa") == 0 ||
+				strcmp (info->short_name, "pulse") == 0 ||
+				strcmp (info->short_name, "oss") == 0)) {
+			char buffer[16];
+			snprintf (buffer, sizeof (buffer), "%u", player->settings->audioBufferMs);
+			ao_append_option (&options, "buffer_time", buffer);
+		}
+		player->aoDev = ao_open_live (driver, &aoFmt, options);
+		ao_free_options (options);
+		if (player->aoDev == NULL) {
 			BarUiMsg (player->settings, MSG_ERR, "Cannot open audio device.\n");
+			if (player->audioFd >= 0) {
+				pthread_mutex_lock (&player->lock);
+				player->outputMode = 2;
+				pthread_mutex_unlock (&player->lock);
+				BarUiMsg (player->settings, MSG_INFO, "Browser audio is available. Choose Listen here in the web player.\n");
+				return true;
+			}
 			return false;
 		}
 	}
@@ -426,10 +498,6 @@ static int play (player_t * const player) {
 				drainMode = DRAIN;
 				avcodec_send_packet (cctx, NULL);
 				debugPrint (DEBUG_AUDIO, "decoder entering drain mode after EOF\n");
-			} else if (pkt->stream_index != player->streamIdx) {
-				/* unused packet */
-				av_packet_unref (pkt);
-				continue;
 			} else if (ret < 0) {
 				/* error, abort */
 				/* mark the EOF, so that BarAoPlayThread can quit*/
@@ -445,6 +513,9 @@ static int play (player_t * const player) {
 				pthread_cond_broadcast (&player->aoplayCond);
 				pthread_mutex_unlock (&player->aoplayLock);
 				break;
+			} else if (pkt->stream_index != player->streamIdx) {
+				av_packet_unref (pkt);
+				continue;
 			} else {
 				/* fill buffer */
 				avcodec_send_packet (cctx, pkt);
@@ -482,7 +553,7 @@ static int play (player_t * const player) {
 			do {
 				pthread_mutex_lock (&player->aoplayLock);
 				bufferHealth = timeBase * (double) (frame->pts - player->lastTimestamp);
-				if (bufferHealth > minBufferHealth) {
+				if (bufferHealth > minBufferHealth && !shouldQuit (player)) {
 					debugPrint (DEBUG_AUDIO, "decoding buffer filled health %"PRIi64" minHealth %"PRIi64"\n",
 							bufferHealth, minBufferHealth);
 					/* Buffer get healthy, resume */
@@ -493,7 +564,7 @@ static int play (player_t * const player) {
 							bufferHealth, minBufferHealth);
 				}
 				pthread_mutex_unlock (&player->aoplayLock);
-			} while (bufferHealth > minBufferHealth);
+			} while (bufferHealth > minBufferHealth && !shouldQuit (player));
 		}
 
 		av_packet_unref (pkt);
@@ -507,12 +578,14 @@ static int play (player_t * const player) {
 }
 
 static void finish (player_t * const player) {
-	ao_close (player->aoDev);
+	if (player->aoDev != NULL) { ao_close (player->aoDev); }
 	player->aoDev = NULL;
+	pthread_mutex_lock (&player->aoplayLock);
 	if (player->fgraph != NULL) {
 		avfilter_graph_free (&player->fgraph);
 		player->fgraph = NULL;
 	}
+	pthread_mutex_unlock (&player->aoplayLock);
 	if (player->cctx != NULL) {
 		avcodec_free_context (&player->cctx);
 		player->cctx = NULL;
@@ -533,16 +606,25 @@ void *BarPlayerThread (void *data) {
 	uintptr_t pret = PLAYER_RET_OK;
 
 	bool retry;
+	unsigned int attempts = 0;
 	do {
 		retry = false;
 		if (openStream (player)) {
+			if (!player->local && attempts == 0) {
+				BarCacheQueue (player->settings, player->song, player->url, player->st);
+			}
 			if (openFilter (player) && openDevice (player)) {
 				changeMode (player, PLAYER_PLAYING);
 				BarPlayerSetVolume (player);
 				const int ret = play (player);
-				retry = (ret == AVERROR_INVALIDDATA ||
-						 ret == -ECONNRESET) &&
-						!player->interrupted;
+				const bool complete = ret == AVERROR_EOF && !shouldQuit (player) &&
+						(player->fctx->pb == NULL || player->fctx->pb->error >= 0);
+				pret = player->outputError ? PLAYER_RET_HARDFAIL :
+						(!shouldQuit (player) && !complete ? PLAYER_RET_SOFTFAIL : PLAYER_RET_OK);
+				retry = !player->local && !player->settings->offlineFallback &&
+						(ret == AVERROR_INVALIDDATA || ret == -ECONNRESET) &&
+						!player->interrupted && !shouldQuit (player) &&
+						++attempts < player->settings->maxRetry;
 			} else {
 				/* filter missing or audio device busy */
 				pret = PLAYER_RET_HARDFAIL;
@@ -560,6 +642,25 @@ void *BarPlayerThread (void *data) {
 	return (void *) pret;
 }
 
+static int64_t monotonicNs (void) {
+	struct timespec now;
+	clock_gettime (CLOCK_MONOTONIC, &now);
+	return (int64_t) now.tv_sec * 1000000000 + now.tv_nsec;
+}
+
+static void browserAudio (player_t *player, const AVFrame *frame) {
+	if (player->audioFd < 0) { return; }
+	const uint16_t endian = 1;
+	uint32_t header[] = {htonl (frame->nb_samples * frame->ch_layout.nb_channels * 2),
+		htonl (frame->sample_rate), htonl (frame->ch_layout.nb_channels),
+		htonl (*(const uint8_t *) &endian), htonl (player->audioEpoch)};
+	struct iovec parts[] = {{header, sizeof (header)},
+		{frame->data[0], frame->nb_samples * frame->ch_layout.nb_channels * 2}};
+	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
+	/* One datagram per frame. A slow browser must never stall local playback. */
+	sendmsg (player->audioFd, &message, MSG_DONTWAIT | MSG_NOSIGNAL);
+}
+
 void *BarAoPlayThread (void *data) {
 	assert (data != NULL);
 
@@ -572,6 +673,7 @@ void *BarAoPlayThread (void *data) {
 	int ret;
 	const double timeBase = av_q2d (av_buffersink_get_time_base (player->fbufsink)),
 			timeBaseSt = av_q2d (player->st->time_base);
+	int64_t deadline = monotonicNs ();
 	while (!shouldQuit(player)) {
 		pthread_mutex_lock (&player->aoplayLock);
 		ret = av_buffersink_get_frame (player->fbufsink, filteredFrame);
@@ -593,8 +695,42 @@ void *BarAoPlayThread (void *data) {
 
 		const int numChannels = filteredFrame->ch_layout.nb_channels;
 		const int bps = av_get_bytes_per_sample (filteredFrame->format);
-		ao_play (player->aoDev, (char *) filteredFrame->data[0],
-				filteredFrame->nb_samples * numChannels * bps);
+		pthread_mutex_lock (&player->lock);
+		unsigned int output = player->outputMode;
+		pthread_mutex_unlock (&player->lock);
+		bool outputOk = true;
+		if ((output & 1) != 0 && player->aoDev == NULL) {
+			outputOk = openDevice (player);
+			pthread_mutex_lock (&player->lock);
+			output = player->outputMode;
+			pthread_mutex_unlock (&player->lock);
+		}
+		if ((output & 1) == 0 && player->aoDev != NULL) { ao_close (player->aoDev); player->aoDev = NULL; }
+		if (outputOk && player->aoDev != NULL) {
+			outputOk = ao_play (player->aoDev, (char *) filteredFrame->data[0],
+					filteredFrame->nb_samples * numChannels * bps) != 0;
+			deadline = monotonicNs ();
+		} else if (outputOk) {
+			const int64_t now = monotonicNs ();
+			if (deadline < now - 250000000) { deadline = now; }
+			deadline += (int64_t) filteredFrame->nb_samples * 1000000000 / filteredFrame->sample_rate;
+			const struct timespec until = {.tv_sec = deadline / 1000000000, .tv_nsec = deadline % 1000000000};
+			clock_nanosleep (CLOCK_MONOTONIC, TIMER_ABSTIME, &until, NULL);
+		}
+		if ((output & 2) != 0 && outputOk) { browserAudio (player, filteredFrame); }
+		if (!outputOk) {
+			BarUiMsg (player->settings, MSG_ERR, "Audio output failed; stopping playback.\n");
+			pthread_mutex_lock (&player->lock);
+			player->outputError = true;
+			player->doQuit = true;
+			player->doPause = false;
+			pthread_cond_broadcast (&player->cond);
+			pthread_mutex_unlock (&player->lock);
+			pthread_mutex_lock (&player->aoplayLock);
+			pthread_cond_broadcast (&player->aoplayCond);
+			pthread_mutex_unlock (&player->aoplayLock);
+			break;
+		}
 
 		const double timestamp = (double) filteredFrame->pts * timeBase;
 		const unsigned int songPlayed = timestamp;
