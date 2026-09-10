@@ -252,6 +252,22 @@ player still controls the track, volume, and pause state. Browser playback has a
 small buffering delay, so Both is not synchronized across devices. To start on a
 computer without speakers, use ``./pianobar --output browser``. Browser audio
 uses Web Audio and requires a click or other user interaction to start.
+New pages request **Listen here** automatically by default. Disable this in
+**Settings → This browser** to use that browser as a remote control only.
+The preference saves immediately in localStorage and applies on the next page
+load. If the browser blocks autoplay, click **Listen here** to allow sound.
+Auto-listen preserves host speakers by switching Host to Both when necessary;
+it joins once and respects later manual stops and remote routing changes.
+The browser starts with a 900ms buffer and increases it up to 2.5 seconds if the
+connection underruns. This adds latency but tolerates uneven delivery. Audio is
+losslessly gzip-compressed when supported; it is still PCM, so budget up to
+1.4 Mbps per listener for 44.1 kHz stereo before compression. Status responses
+are compressed too. Album art is privately cached by the browser for one hour,
+and failed player artwork requests retry up to three times.
+
+On phones, artwork and controls stack vertically, with persistent bottom
+navigation and touch-sized buttons. **Station tools** expands the station
+management groups; the keyboard legend remains collapsed by default.
 
 The header's dark-mode toggle remembers your choice in localStorage (and uses
 your system theme until you choose one). Stations and Library navigation open
@@ -454,3 +470,22 @@ REST API and Rook capabilities. Open pages register automatically; name each
 page beside **Listen here** and route audio to one, several, all, or none.
 See ``integrations/README.md`` for endpoints, authentication, browser activation,
 and the Rook capability manifest.
+
+Android app and device downloads
+--------------------------------
+
+The generic Android companion starts without a server address. Configure your
+server in its Settings screen, then open the existing web player. It uses the
+installed browser's sign-in session and supports all server web controls.
+See `Android setup and builds <android/README.md>`_ for APK build instructions,
+the GitHub Actions template, signing, and device tests.
+
+The web Library includes a **Download** link for each saved track. Downloads
+require the same authentication as playback. Cached AAC is exported as M4A and
+MP3 as MP3, without re-encoding, with metadata and available JPEG/PNG artwork.
+Install the ``ffmpeg`` and ``ffprobe`` command-line tools on the server to enable
+exports. Two exports can be prepared at once; downloads leave the saved library
+and active playback unchanged.
+
+In the Android app, use **Downloads → Add downloaded tracks** to import those
+files into its on-device library for background playback without the server.

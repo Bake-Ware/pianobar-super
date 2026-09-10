@@ -1213,3 +1213,87 @@ main > footer { position: fixed; z-index: 2; left: var(--sidebar-width); right: 
 .settings-buttons button { padding: 12px 18px; border: 1px solid var(--line); background: var(--selected); color: var(--ink); }
 #apply-settings { background: var(--orange); color: #172b2b; border-color: var(--orange); }
 @media (max-width: 850px) { .settings-grid { grid-template-columns: 1fr; } }
+
+/* Comfortable touch controls and a phone layout that scrolls with the page. */
+.primary-nav { display: flex; flex-direction: column; }
+#sidebar-tools-toggle { display: none; }
+.audio-output input { min-width: 0; width: 100%; padding: 10px; border: 1px solid #506056; background: var(--player); color: #f4f4eb; font: inherit; }
+.saved-song-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.saved-download { display: inline-flex; align-items: center; justify-content: center; border: 1px solid var(--line); padding: 9px 13px; min-height: 36px; font-size: 11px; white-space: nowrap; }
+@media (max-width: 560px) {
+    .saved-song-actions { grid-column: 3; grid-row: 1 / span 2; flex-direction: column; align-items: stretch; }
+    .saved-song-actions .saved-play { grid-column: auto; grid-row: auto; }
+    .saved-download { min-height: 44px; font-size: 12px; padding: 9px; }
+}
+.audio-output select { max-width: 100%; }
+@media (min-width: 851px) and (max-width: 1100px) {
+    .player-card { grid-template-columns: minmax(0, 1fr); }
+    .artwork { order: 0; max-width: 480px; justify-self: center; }
+    .player-content { aspect-ratio: auto; }
+    .player-controls { overflow: visible; }
+}
+@media (max-width: 850px) {
+    .sidebar { position: relative; padding: 20px max(18px, env(safe-area-inset-left)) 12px; display: block; }
+    .sidebar-scroll { display: block; overflow: visible; }
+    .sidebar .brand { width: auto; margin: 0; font-size: 27px; }
+    .sidebar > .connection { margin: 12px 0 0; font-size: 11px; }
+    .sidebar-label { display: none; }
+    .primary-nav {
+        position: fixed; z-index: 5; inset: auto 0 0;
+        display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+        padding: 6px max(8px, env(safe-area-inset-right)) calc(6px + env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left));
+        border-top: 1px solid var(--line); background: var(--paper);
+    }
+    .sidebar .nav { flex-direction: column; justify-content: center; gap: 4px; min-height: 54px; margin: 0; padding: 6px 2px; font-size: 11px; }
+    .sidebar .nav span { display: block; width: auto; font-size: 20px; line-height: 23px; }
+    #nav-cover { width: 23px; height: 23px; }
+    #sidebar-tools-toggle { position: absolute; top: 14px; right: max(18px, env(safe-area-inset-right)); display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 10px 0; background: transparent; color: var(--ink); border: 0; text-align: left; font-size: 12px; }
+    .sidebar .sidebar-controls { display: none; margin-top: 0; }
+    .sidebar.tools-open .sidebar-controls { display: block; margin-top: 14px; }
+    .sidebar-group summary, .sidebar-group .action-grid button { min-height: 44px; font-size: 13px; }
+    main { padding: 0 max(16px, env(safe-area-inset-right)) calc(120px + env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); min-height: 0; }
+    header { gap: 14px; padding: 18px 0; margin-bottom: 20px; }
+    .breadcrumb { font-size: 12px; gap: 8px; }
+    .header-actions { justify-content: flex-start; gap: 8px; }
+    .header-actions button { min-height: 44px; margin: 0; padding: 10px 12px; font-size: 12px; }
+    .header-actions .theme-toggle { margin-left: auto; }
+    .player-card { grid-template-columns: minmax(0, 1fr); gap: 18px; margin-bottom: 24px; }
+    .artwork { order: 0; width: min(100%, 70vw); max-width: 360px; justify-self: center; }
+    .player-content { aspect-ratio: auto; --control-inset: 22px; background: color-mix(in srgb, var(--player) 92%, transparent); }
+    .player-controls { overflow: visible; }
+    .player-content h2 { font-size: clamp(26px, 6vw, 36px); }
+    .artist { font-size: 15px; }
+    .album { font-size: 12px; }
+    .progress-wrap { margin-top: 26px; }
+    .times { font-size: 12px; }
+    .transport { flex-wrap: wrap; gap: 12px; }
+    .transport-main { gap: 10px; }
+    .icon-button { min-width: 44px; min-height: 48px; }
+    .play-button { width: 56px; height: 56px; font-size: 22px; }
+    .volume { gap: 4px; margin-left: auto; }
+    .volume button { width: 44px; height: 44px; font-size: 18px; }
+    .volume span { font-size: 11px; }
+    .track-actions { flex-wrap: wrap; gap: 4px 16px; padding-top: 10px; margin-top: 18px; }
+    .track-actions button { min-height: 44px; font-size: 12px; }
+    .audio-output { gap: 10px; font-size: 13px; }
+    .audio-output select, .audio-output button { min-height: 44px; }
+    .audio-output input, input[type="search"], .settings-grid input, .settings-grid select, .answer-row input { font-size: 16px; }
+    #audio-status { font-size: 12px; line-height: 1.5; }
+    .player-content summary, .player-content .more-actions button { min-height: 44px; font-size: 13px; }
+    .shortcut-legend summary { min-height: 44px; padding: 12px 0; }
+    .shortcut-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .station-play, .saved-play, #refresh-library, #prompt-options button { min-height: 44px; font-size: 12px; }
+    .station-row { gap: 12px; }
+    .saved-song-detail { font-size: 12px; line-height: 1.5; }
+    main > footer { bottom: calc(67px + env(safe-area-inset-bottom)); flex-wrap: nowrap; gap: 12px; padding: 8px 16px; font-size: 9px; }
+    main > footer span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    main > footer span:last-child { flex-shrink: 0; }
+    #notice { bottom: calc(110px + env(safe-area-inset-bottom)); }
+    dialog { max-height: calc(100dvh - 40px); overflow-y: auto; }
+}
+@media (max-width: 370px) {
+    .player-content { --control-inset: 16px; }
+    .header-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; }
+    .header-actions .theme-toggle { margin: 0; }
+    main > footer span:last-child { display: none; }
+}

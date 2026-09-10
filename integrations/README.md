@@ -49,7 +49,9 @@ action, stale prompt, malformed command or busy player returns HTTP 400 with an
 ## Browser endpoints
 
 Every open page registers independently and renews its lease every two seconds.
-Pages start silent. A page expires after 90 seconds without a heartbeat; closing
+Registration starts silent, then the web page requests playback once by default.
+Disable auto-listen in **Settings → This browser** to keep a browser silent on
+page load; the preference is local to that browser. A page expires after 90 seconds without a heartbeat; closing
 a page attempts immediate unregistration. A reload gets a new ID. Browser names
 can be edited beside **Listen here**, or through the API. Names need not be unique.
 
@@ -65,7 +67,7 @@ can be edited beside **Listen here**, or through the API. Names need not be uniq
 
 Routing replaces the entire browser recipient set atomically. An unknown or
 expired ID rejects the whole request. `all` means all currently registered pages;
-new pages still start silent. `none` silences browser recipients and leaves native
+new pages can subsequently join through their auto-listen preference. `none` silences browser recipients and leaves native
 speakers unchanged. A nonempty route switches `host` output to `both` so browser
 audio is available while retaining native speakers. Individual `enabled` changes
 do not change the global output mode. `volume` accepts 0 through 1.
@@ -120,6 +122,25 @@ and `cmd.pianobar-state` for prompts before issuing dependent operations.
 
 ## Verification
 
+The PCM endpoint negotiates gzip via `Accept-Encoding` and flushes each frame
+for streaming clients. HTTP libraries that decompress responses automatically
+see the same 20-byte frame headers and PCM payloads. Use `Accept-Encoding:
+identity` when reading the wire format directly. Browser buffering begins at
+900ms and grows on underruns, so routing and audible playback can differ briefly.
+
 Run `make test` for native and HTTP coverage. For real browser playback tests,
 install Playwright and Chromium in a test environment, then run
 `python tests/network.py --browser` and `python tests/web.py --browser`.
+
+## Download saved tracks
+
+`GET /api/download/{id}` exports a completed library entry using the same auth,
+Host, Origin, and fetch-site checks as other endpoints. The ID is the library's
+64-character hash plus `.mka`. The response is an attachment with an RFC 5987
+filename, `Content-Length`, and `audio/mp4` (AAC/M4A) or `audio/mpeg` (MP3).
+Encoded audio and metadata are preserved; cached JPEG/PNG artwork is attached
+when available. The source cache is not modified. Requires server-side `ffmpeg`
+and `ffprobe`. Invalid/missing entries return 404; preparation failure or two
+already-active exports returns 503. Exports are generated on demand and temporary
+files are removed after the response. The endpoint does not currently support
+partial/resumable downloads.

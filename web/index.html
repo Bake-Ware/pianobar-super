@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#172b2b">
   <title>pianobar</title>
   <link id="favicon" rel="icon" href="/favicon.svg">
@@ -14,11 +14,14 @@
     <div class="sidebar-scroll">
     <a class="brand" href="/" aria-label="pianobar home"><span class="brand-mark"><i></i><i></i><i></i><i></i></span>pianobar<span class="brand-dot">.</span></a>
     <p class="eyebrow sidebar-label">YOUR LISTENING ROOM</p>
+    <nav class="primary-nav" aria-label="Main navigation">
     <a class="nav active" href="#player" data-view="player" aria-current="page"><span id="nav-player-icon" aria-hidden="true">◉</span><img id="nav-cover" alt="" hidden> Now playing</a>
     <a class="nav" href="#stations" data-view="stations"><span>≋</span> Stations</a>
     <a class="nav" href="#library" data-view="library"><span>▤</span> Library</a>
     <a class="nav" href="#settings" data-view="settings"><span>⚙</span> Settings</a>
-    <div class="sidebar-controls" data-views="player stations library">
+    </nav>
+    <button id="sidebar-tools-toggle" type="button" aria-expanded="false" aria-controls="sidebar-tools" data-views="player stations library">Station tools <span aria-hidden="true">+</span></button>
+    <div id="sidebar-tools" class="sidebar-controls" data-views="player stations library">
       <details id="station-controls" class="sidebar-group"><summary>Find your next favorite</summary><p>Shape the station. Follow your curiosity.</p><div id="station-actions" class="action-grid"></div></details>
       <details id="library-controls" data-views="player stations" class="sidebar-group"><summary>Make it yours</summary><p>Keep the good ones close, even offline.</p><div id="library-actions" class="action-grid"></div></details>
     </div>
@@ -59,6 +62,10 @@
       <p class="eyebrow">YOUR PLAYER, YOUR WAY</p><h1 id="settings-title">Settings</h1>
       <p id="setup-message" hidden>Add your Pandora account to start listening, or choose offline startup to use a saved library.</p>
       <form id="settings-form">
+        <fieldset><legend>This browser</legend>
+          <label class="setting-check"><input id="setting-auto-listen" type="checkbox" checked>Listen here automatically when the page opens</label>
+          <p id="auto-listen-note" class="settings-hint">Saved automatically for this browser. Applies on the next page load. Your browser may still require a click to allow sound.</p>
+        </fieldset>
         <fieldset><legend>Pandora account</legend><div class="settings-grid">
           <label>Email<input id="setting-user" type="email" autocomplete="username" maxlength="450"></label>
           <label>Password<input id="setting-password" type="password" autocomplete="new-password" maxlength="450" placeholder="Enter your Pandora password"></label>

@@ -2,6 +2,7 @@
 """Authenticated LAN host and real native/browser PCM, without Pandora or speakers."""
 import base64
 import contextlib
+import gzip
 import hashlib
 import http.client
 import json
@@ -81,7 +82,23 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
             request(path, authorized=False, expected=401)
         request('/api/state', headers={'Authorization': 'Basic wrong'}, expected=401)
         request('/api/state', headers={'Origin': 'https://example.com'}, expected=403)
+        navigation = {'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document'}
+        assert b'<!doctype html>' in request('/', headers=navigation)
+        request('/', headers=navigation, authorized=False, expected=401)
+        request('/api/state', headers=navigation, expected=403)
+        request('/', headers={**navigation, 'Sec-Fetch-Dest': 'iframe'}, expected=403)
+        request('/api/clients/register', {'name': 'Cross-site'}, headers=navigation, expected=403)
         assert request('/api/artwork/' + image_id) == image
+        with urllib.request.urlopen(urllib.request.Request(origin + '/api/artwork/' + image_id,
+                                    headers={'Authorization': auth})) as cover_response:
+            assert cover_response.headers['Cache-Control'] == 'private, max-age=3600'
+        with urllib.request.urlopen(urllib.request.Request(origin + '/api/state',
+                                    headers={'Authorization': auth, 'Accept-Encoding': 'gzip'})) as compressed:
+            assert compressed.headers['Content-Encoding'] == 'gzip'
+            assert json.loads(gzip.decompress(compressed.read()))['state']['title'] == 'LAN audio'
+        with urllib.request.urlopen(urllib.request.Request(origin + '/api/state',
+                                    headers={'Authorization': auth, 'Accept-Encoding': 'gzip;q=0'})) as plain:
+            assert not plain.headers.get('Content-Encoding')
         for invalid in ['../config', 'b' * 64, 'c' * 64]:
             request('/api/artwork/' + invalid, expected=404)
         assert request('/api/library')['songs'][0]['cover'] == '/api/artwork/' + image_id
@@ -126,13 +143,22 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
         if '--browser' in sys.argv:
             from playwright.sync_api import sync_playwright
             with sync_playwright() as p:
-                browser = p.chromium.launch(executable_path=os.environ.get('PIANOBAR_TEST_BROWSER'), args=['--mute-audio'])
+                browser = p.chromium.launch(executable_path=os.environ.get('PIANOBAR_TEST_BROWSER'),
+                                            args=['--mute-audio', '--autoplay-policy=no-user-gesture-required'])
                 page = browser.new_page(http_credentials={'username': 'pianobar', 'password': 'test-network-password'},
                                         viewport={'width': 1440, 'height': 1080})
                 errors = []
+                page.add_init_script("localStorage.setItem('pianobarAutoListen', 'false')")
                 page.on('pageerror', lambda error: errors.append(str(error)))
                 page.goto(origin + '/#library')
                 page.wait_for_function("() => document.querySelector('.saved-artwork img')?.naturalWidth > 0")
+                with page.expect_download() as completed_download:
+                    page.locator('.saved-download').click()
+                download = completed_download.value
+                assert download.suggested_filename.endswith('.m4a')
+                download.save_as(str(base / 'browser-download.m4a'))
+                exported = json.loads(subprocess.check_output(['ffprobe', '-v', 'error', '-show_format', '-of', 'json', str(base / 'browser-download.m4a')]))
+                assert exported['format']['tags']['title'] == 'LAN audio'
                 assert page.locator('#favicon').get_attribute('href') == '/api/artwork/' + image_id
                 page.screenshot(path='/tmp/pianobar-web-cached-art.png', full_page=True)
                 page.locator('.nav[data-view="player"]').click()
@@ -142,6 +168,7 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
                 page.wait_for_function('() => audioSources.size > 0')
                 wait_for(lambda s: not s['pending'])
                 other = browser.new_page(http_credentials={'username': 'pianobar', 'password': 'test-network-password'})
+                other.add_init_script("localStorage.setItem('pianobarAutoListen', 'false')")
                 other.on('pageerror', lambda error: errors.append(str(error)))
                 other.goto(origin)
                 other.get_by_role('button', name='Listen here', exact=True).click()
@@ -180,8 +207,8 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
                 blocked.goto(origin)
                 blocked.wait_for_function('() => browserId !== null')
                 blocked_id = blocked.evaluate('browserId')
-                request('/api/clients/route', {'mode': 'all'})
                 blocked.wait_for_function("() => browserStatus === 'blocked'")
+                assert next(c for c in request('/api/clients')['clients'] if c['id'] == blocked_id)['enabled']
                 assert blocked.evaluate('audioSources.size') == 0
                 blocked.get_by_role('button', name='Listen here', exact=True).click()
                 blocked.wait_for_function('() => audioSources.size > 0')
@@ -214,6 +241,112 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
                 page.get_by_role('button', name='Stop listening', exact=True).click()
                 assert page.evaluate('audioController') is None
                 assert page.evaluate('audioSources.size') == 0
+                # Model a proxy/mobile connection delivering PCM in 1.25-second
+                # bursts. Audio must stay scheduled across bursts, not repeatedly
+                # throw away samples at the old one-second queue limit.
+                mobile = browser.new_page(http_credentials={'username': 'pianobar', 'password': 'test-network-password'},
+                                          viewport={'width': 390, 'height': 844}, is_mobile=True, has_touch=True)
+                mobile.on('pageerror', lambda error: errors.append(str(error)))
+                mobile.add_init_script('''
+                    localStorage.setItem('pianobarAutoListen', 'false');
+                    const nativeFetch = window.fetch;
+                    window.fetch = async (...args) => {
+                      const response = await nativeFetch(...args);
+                      if (args[0] !== '/api/audio') return response;
+                      const reader = response.body.getReader();
+                      let timer, chunks = [];
+                      const body = new ReadableStream({
+                        start(controller) {
+                          timer = setInterval(() => {
+                            for (const chunk of chunks) controller.enqueue(chunk);
+                            chunks = [];
+                          }, 1250);
+                          (async () => {
+                            try {
+                              while (true) {
+                                const {value, done} = await reader.read();
+                                if (done) break;
+                                chunks.push(value);
+                              }
+                              clearInterval(timer);
+                              controller.close();
+                            } catch (error) { clearInterval(timer); controller.error(error); }
+                          })();
+                        },
+                        cancel() { clearInterval(timer); reader.cancel(); }
+                      });
+                      return new Response(body, {status: response.status, headers: response.headers});
+                    };
+                ''')
+                cover_requests = []
+                def fail_first_cover(route):
+                    cover_requests.append(route.request.url)
+                    if len(cover_requests) == 1:
+                        route.fulfill(status=503, body='Temporary artwork failure')
+                    else:
+                        route.continue_()
+                mobile.route('**/api/artwork/*', fail_first_cover)
+                mobile.goto(origin)
+                mobile.wait_for_function("() => document.getElementById('cover').naturalWidth > 0 && !document.getElementById('cover').hidden")
+                assert len(cover_requests) > 1
+                mobile.get_by_role('button', name='Listen here', exact=True).click()
+                mobile.wait_for_function('() => audioNextTime - audioContext.currentTime > 1.5')
+                mobile.wait_for_timeout(7000)
+                assert mobile.evaluate('audioStats.resyncs') == 0
+                assert mobile.evaluate('audioStats.underruns') <= 1
+                # One transient heartbeat failure must retain the playing lease.
+                mobile_id = mobile.evaluate('browserId')
+                mobile.route('**/api/clients/heartbeat', lambda route: route.fulfill(
+                    status=503, content_type='application/json', body='{"error":"Temporary outage"}'), times=1)
+                mobile.wait_for_timeout(2500)
+                assert mobile.evaluate('browserId') == mobile_id
+                assert mobile.evaluate('audioController !== null')
+                mobile.route('**/api/artwork/*', lambda route: route.fulfill(
+                    status=503, body='Temporary library artwork failure'), times=1)
+                for width in (320, 390, 768):
+                    mobile.set_viewport_size({'width': width, 'height': 844})
+                    for view in ('player', 'library', 'stations', 'settings'):
+                        mobile.locator(f'.nav[data-view="{view}"]').click()
+                        if view == 'library':
+                            mobile.wait_for_function("() => document.querySelector('.saved-artwork img')?.naturalWidth > 0")
+                        assert mobile.evaluate('document.documentElement.scrollWidth <= innerWidth'), (width, view)
+                        assert mobile.locator(f'.nav[data-view="{view}"]').bounding_box()['height'] >= 44
+                    mobile.locator('.nav[data-view="player"]').click()
+                    assert mobile.evaluate("document.querySelector('.player-controls').scrollHeight <= document.querySelector('.player-controls').clientHeight + 1")
+                mobile.set_viewport_size({'width': 390, 'height': 844})
+                mobile.screenshot(path='/tmp/pianobar-mobile-player.png', full_page=True)
+                mobile.locator('.nav[data-view="library"]').click()
+                mobile.wait_for_function("() => document.querySelector('.saved-artwork img')?.naturalWidth > 0")
+                mobile.screenshot(path='/tmp/pianobar-mobile-library.png', full_page=True)
+                mobile.close()
+                print('PASS: compressed audio in Chromium, burst buffering, artwork retries, heartbeat recovery, mobile navigation and overflow')
+                # A fresh browser opts in without a click; Settings can remember
+                # a remote-control-only preference across reloads on that browser.
+                automatic = browser.new_page(http_credentials={'username': 'pianobar', 'password': 'test-network-password'})
+                automatic.on('pageerror', lambda error: errors.append(str(error)))
+                request('/api/command', {'output': 'host'})
+                wait_for(lambda s: s['state'].get('output') == 'host' and not s['pending'])
+                automatic.goto(origin)
+                automatic.wait_for_function('() => audioSources.size > 0')
+                wait_for(lambda s: s['state'].get('output') == 'both' and not s['pending'])
+                automatic.locator('.nav[data-view="settings"]').click()
+                assert automatic.locator('#setting-auto-listen').is_checked()
+                automatic.locator('#setting-auto-listen').uncheck()
+                assert automatic.evaluate("localStorage.getItem('pianobarAutoListen')") == 'false'
+                automatic.reload()
+                automatic.wait_for_function('() => browserId !== null && revision >= 0')
+                automatic.wait_for_timeout(2500)
+                assert automatic.evaluate('audioController === null && !browserDesired')
+                assert not automatic.locator('#setting-auto-listen').is_checked()
+                automatic.locator('#setting-auto-listen').check()
+                automatic.reload()
+                automatic.wait_for_function('() => audioSources.size > 0')
+                automatic.locator('.nav[data-view="player"]').click()
+                automatic.get_by_role('button', name='Stop listening', exact=True).click()
+                automatic.wait_for_timeout(2500)
+                assert automatic.evaluate('audioController === null && !browserDesired')
+                automatic.close()
+                print('PASS: auto-listen default, host speaker preservation, per-browser setting/reload, manual stop respected, blocked autoplay fallback')
                 assert not errors, errors
                 browser.close()
             print('PASS: password login, cached library thumbnails/favicon, simultaneous browsers, output selector, pause/resume, stop/cleanup')

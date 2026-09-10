@@ -1,0 +1,42 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'systems.bake.pianobar'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'systems.bake.pianobar'
+        minSdk 26
+        targetSdk 35
+        versionCode 1
+        versionName '2026.09.10'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    buildFeatures { buildConfig true }
+    signingConfigs {
+        release {
+            if (System.getenv('PIANOBAR_KEYSTORE')) {
+                storeFile file(System.getenv('PIANOBAR_KEYSTORE'))
+                storePassword System.getenv('PIANOBAR_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('PIANOBAR_KEY_ALIAS') ?: 'pianobar'
+                keyPassword System.getenv('PIANOBAR_KEY_PASSWORD') ?: System.getenv('PIANOBAR_KEYSTORE_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            if (System.getenv('PIANOBAR_KEYSTORE')) signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+dependencies {
+    implementation 'androidx.browser:browser:1.8.0'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test:core:1.6.1'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    androidTestImplementation 'androidx.test.uiautomator:uiautomator:2.3.0'
+}

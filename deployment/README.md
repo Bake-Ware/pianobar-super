@@ -14,7 +14,9 @@ Build with `make`, run `make test`, then install with `make install`. Create the
 runtime user and writable home before installing the supplied systemd unit.
 The unit pins the player to `127.0.0.1:8765` with browser audio output. Configure
 Nginx with the supplied example and enable the services for automatic startup.
-Click **Listen here** on each browser client to receive audio.
+Pages request playback automatically by default. If autoplay is blocked, click
+**Listen here** to allow sound. Disable automatic listening for a browser in
+**Settings → This browser**; that preference is saved locally without a restart.
 
 ## Access and routing
 
@@ -25,7 +27,9 @@ service tokens, tunnel credentials, personal access policies or live configs.
 
 Nginx translates only the configured public HTTPS Origin to the loopback origin
 expected by the player. Other origins fail CSRF validation. Proxy buffering and
-compression are disabled for live audio. Change the unit and proxy together if
+nginx compression are disabled for live audio. Preserve `Accept-Encoding` so
+pianobar can compress status responses and flush compressed audio on each frame;
+proxy-level compression can hold audio until a larger buffer fills. Change the unit and proxy together if
 you change the listen address or port.
 
 ## Operations

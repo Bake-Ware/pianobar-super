@@ -19,6 +19,11 @@ window.addEventListener('storage', event => {
   if (event.key === 'pianobarTheme' && ['dark', 'light'].includes(event.newValue)) applyTheme(event.newValue);
 });
 const views = {player: 'Now playing', stations: 'Stations', library: 'Library', settings: 'Settings'};
+$('sidebar-tools-toggle').addEventListener('click', () => {
+  const open = document.querySelector('.sidebar').classList.toggle('tools-open');
+  $('sidebar-tools-toggle').setAttribute('aria-expanded', String(open));
+  $('sidebar-tools-toggle').querySelector('span').textContent = open ? '−' : '+';
+});
 function showView(view, focus = false) {
   if (!views[view]) view = 'player';
   document.body.dataset.view = view;
@@ -55,15 +60,43 @@ let audioContext, audioController, audioNextTime = 0, audioEpoch = null, desired
 let browserId = null, browserRegistration, browserDesired = false, browserStatus = 'idle';
 let browserVolume = 1, audioGain, browserPollBusy = false, browserLeaving = false;
 let browserMutation = 0, audioGeneration = 0;
-let failedCoverSource = '';
+let browserLastSeen = 0;
+let autoListen = true;
+try { autoListen = localStorage.getItem('pianobarAutoListen') !== 'false'; } catch (_) {}
+let autoListenPending = autoListen;
+$('setting-auto-listen').checked = autoListen;
+$('setting-auto-listen').addEventListener('change', event => {
+  autoListen = event.target.checked;
+  autoListenPending = false;
+  try {
+    localStorage.setItem('pianobarAutoListen', String(autoListen));
+    $('auto-listen-note').textContent = 'Saved for this browser. Applies on the next page load. Your browser may still require a click to allow sound.';
+  } catch (_) {
+    $('auto-listen-note').textContent = 'Browser storage is unavailable, so this preference cannot be remembered after reloading.';
+  }
+});
+window.addEventListener('storage', event => {
+  if (event.key === 'pianobarAutoListen') {
+    autoListen = event.newValue !== 'false';
+    $('setting-auto-listen').checked = autoListen;
+    if (!autoListen) autoListenPending = false;
+  }
+});
+let coverSource = '', coverAttempt = 0, coverRetry;
+let audioBufferSeconds = .9;
+const audioStats = {underruns: 0, resyncs: 0};
 let settingsLoaded = false, settingsBusy = false, setupShown = false;
 const audioSources = new Set();
 async function browserRequest(operation, data) {
   const response = await fetch('/api/clients/' + operation, {
     method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data)
   });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error || 'Could not contact browser controls.');
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(result.error || 'Could not contact browser controls.');
+    error.status = response.status;
+    throw error;
+  }
   return result;
 }
 async function registerBrowser() {
@@ -74,6 +107,7 @@ async function registerBrowser() {
     const result = await browserRequest('register', {name: name || 'Browser · ' +
       (navigator.userAgent.includes('Mobile') ? 'Mobile' : navigator.platform || 'Desktop')});
     browserId = result.id;
+    browserLastSeen = performance.now();
     $('browser-name').value = result.name;
   })().finally(() => { browserRegistration = null; });
   await browserRegistration;
@@ -92,19 +126,33 @@ async function pollBrowser() {
     await registerBrowser();
     const page = await browserRequest('heartbeat', {id: browserId, status: browserStatus,
       ready: audioContext?.state === 'running'});
+    browserLastSeen = performance.now();
     if (mutation !== browserMutation) return;
     browserDesired = page.enabled;
     browserVolume = page.volume;
     if (document.activeElement !== $('browser-name')) $('browser-name').value = page.name;
     if (audioGain) audioGain.gain.value = browserVolume;
+    if (autoListenPending && revision >= 0 && ['host', 'browser', 'both'].includes(snapshot.state.output) &&
+        !snapshot.playerStopped && !snapshot.setupRequired &&
+        !snapshot.restarting && !snapshot.exited && !snapshot.pending && !snapshot.prompt.active && !sending) {
+      // Join once on page load. Subsequent remote routing or Stop listening
+      // remains authoritative; a heartbeat must not turn this browser back on.
+      if (snapshot.state.output === 'host' && !await command({output: 'both'})) return;
+      if (!autoListenPending || mutation !== browserMutation) return;
+      await updateBrowserAudio(true);
+      autoListenPending = false;
+    }
     if (!browserDesired) stopListening();
     else if (!audioController && !snapshot.playerStopped && !snapshot.restarting && snapshot.state.output !== 'host') {
       await startListening();
     }
   } catch (error) {
-    // Fail silent on a lost control connection, and obtain a fresh lease next time.
-    stopListening();
-    browserId = null;
+    // A single failed heartbeat must not tear down a healthy audio stream.
+    // The server still enforces routing and lease expiry on every audio packet.
+    if ([400, 401, 403, 404].includes(error.status) || performance.now() - browserLastSeen > 90000) {
+      stopListening();
+      browserId = null;
+    }
   } finally { browserPollBusy = false; }
 }
 setInterval(pollBrowser, 2000);
@@ -187,6 +235,15 @@ function renderLibrary() {
     play.textContent = '▶ Play';
     play.setAttribute('aria-label', 'Play ' + (song.title || 'Untitled song'));
     play.addEventListener('click', () => command({playSaved: song.id}));
+    const download = document.createElement('a');
+    download.className = 'saved-download';
+    download.textContent = '↓ Download';
+    download.href = '/api/download/' + encodeURIComponent(song.id);
+    download.setAttribute('download', '');
+    download.setAttribute('aria-label', 'Download ' + (song.title || 'Untitled song'));
+    const actions = document.createElement('div');
+    actions.className = 'saved-song-actions';
+    actions.append(play, download);
     const artwork = document.createElement('span');
     artwork.className = 'saved-artwork';
     artwork.setAttribute('aria-hidden', 'true');
@@ -195,11 +252,24 @@ function renderLibrary() {
       const image = document.createElement('img');
       image.alt = '';
       image.loading = 'lazy';
+      image.decoding = 'async';
       image.src = song.cover;
-      image.addEventListener('error', () => image.remove());
+      let attempts = 0;
+      image.addEventListener('load', () => { image.hidden = false; });
+      image.addEventListener('error', () => {
+        image.hidden = true;
+        if (attempts >= 3) return;
+        const attempt = ++attempts;
+        setTimeout(() => {
+          if (image.isConnected) {
+            image.hidden = false;
+            image.src = song.cover + '?retry=' + attempt;
+          }
+        }, 1000 * 2 ** attempt);
+      });
       artwork.append(image);
     }
-    row.append(artwork, info, duration, play);
+    row.append(artwork, info, duration, actions);
     return row;
   });
   $('saved-songs').replaceChildren(...rows);
@@ -459,20 +529,13 @@ function render(data) {
   love.setAttribute('aria-pressed', String(!!state.loved));
   const localCover = /^\/api\/artwork\/[0-9a-f]{64}$/.test(state.cachedCover || '') ? state.cachedCover : '';
   const source = data.exited ? '' : (localCover || (!state.offline && /^https?:\/\//i.test(state.cover || '') ? state.cover : ''));
-  const favicon = source && source !== failedCoverSource ? source : '/favicon.svg';
-  if ($('favicon').getAttribute('href') !== favicon) $('favicon').href = favicon;
-  for (const id of ['cover', 'nav-cover']) {
-    const cover = $(id);
-    if (source !== (cover.getAttribute('src') || '')) {
-      cover.hidden = true;
-      if (id === 'nav-cover') $('nav-player-icon').hidden = false;
-      if (source) cover.src = source;
-      else cover.removeAttribute('src');
-    }
-  }
+  renderArtwork(source);
   const transcript = $('transcript');
-  transcript.textContent = data.output || 'Waiting for the player…';
-  followTranscript();
+  const output = data.output || 'Waiting for the player…';
+  if (transcript.textContent !== output) {
+    transcript.textContent = output;
+    followTranscript();
+  }
   $('cache-note').textContent = state.cachePending
     ? `Saving ${state.cachePending} song${state.cachePending === 1 ? '' : 's'} for offline…`
     : (state.offline ? 'Your saved songs. No connection needed.' : 'Songs save automatically when loaded.');
@@ -512,14 +575,28 @@ function queueAudio(data, rate, channels, little, epoch) {
     const samples = buffer.getChannelData(channel);
     for (let frame = 0; frame < frames; ++frame) samples[frame] = pcm.getInt16((frame * channels + channel) * 2, little) / 32768;
   }
-  if (audioNextTime > audioContext.currentTime + 1) clearAudioQueue();
-  if (audioNextTime < audioContext.currentTime) audioNextTime = audioContext.currentTime + .15;
+  const now = audioContext.currentTime;
+  // Network reads arrive in bursts. Keep contiguous samples scheduled through
+  // those bursts instead of destroying the queue whenever it exceeds a second.
+  // Only resync truly stale audio (for example after a device wakes from sleep).
+  if (audioNextTime > now + 8) {
+    clearAudioQueue();
+    ++audioStats.resyncs;
+  }
+  if (audioNextTime < now + .02) {
+    if (audioNextTime) {
+      ++audioStats.underruns;
+      audioBufferSeconds = Math.min(2.5, audioBufferSeconds + .4);
+    }
+    audioNextTime = now + audioBufferSeconds;
+  }
   const source = audioContext.createBufferSource();
   source.buffer = buffer;
   source.connect(audioGain);
   audioSources.add(source);
   source.onended = () => {
     audioSources.delete(source);
+    source.disconnect();
     if (!audioSources.size && audioController) browserStatus = 'waiting';
   };
   source.start(audioNextTime);
@@ -533,7 +610,7 @@ async function startListening() {
   const Context = window.AudioContext || window.webkitAudioContext;
   if (!Context) throw new Error('This browser does not support audio playback.');
   if (!audioContext || audioContext.state === 'closed') {
-    audioContext = new Context();
+    audioContext = new Context({latencyHint: 'playback'});
     audioGain = audioContext.createGain();
     audioGain.gain.value = browserVolume;
     audioGain.connect(audioContext.destination);
@@ -582,6 +659,7 @@ async function startListening() {
     .finally(() => { if (audioController === controller) stopListening(); });
 }
 async function chooseOutput(output) {
+  autoListenPending = false;
   desiredOutput = output;
   try {
     if (output === 'host') stopListening();
@@ -615,18 +693,53 @@ window.addEventListener('pagehide', () => {
     headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: browserId})}).catch(() => {});
   browserId = null;
 });
-window.addEventListener('pageshow', () => { browserLeaving = false; pollBrowser(); });
+window.addEventListener('pageshow', event => {
+  browserLeaving = false;
+  if (event.persisted) autoListenPending = autoListen;
+  pollBrowser();
+});
 
 function followTranscript() {
   const transcript = $('transcript');
   transcript.scrollTop = transcript.scrollHeight;
 }
 new ResizeObserver(followTranscript).observe($('transcript'));
-$('cover').addEventListener('load', () => { $('cover').hidden = false; });
+function renderArtwork(source) {
+  if (source === coverSource) return;
+  clearTimeout(coverRetry);
+  coverSource = source;
+  coverAttempt = 0;
+  loadArtwork();
+}
+function loadArtwork() {
+  $('favicon').href = '/favicon.svg';
+  for (const id of ['cover', 'nav-cover']) {
+    const image = $(id);
+    image.hidden = true;
+    if (coverSource) {
+      // Bypass a failed cached response on bounded retries. Cached art itself
+      // stays on this authenticated origin, including the favicon and thumbnail.
+      const url = new URL(coverSource, location.href);
+      if (coverAttempt) url.searchParams.set('retry', coverAttempt);
+      image.src = url.pathname.startsWith('/api/artwork/') && url.origin === location.origin
+        ? url.pathname + url.search : url.href;
+    } else image.removeAttribute('src');
+  }
+  $('nav-player-icon').hidden = false;
+}
+$('cover').addEventListener('load', () => {
+  $('cover').hidden = false;
+  $('favicon').href = $('cover').getAttribute('src');
+  clearTimeout(coverRetry);
+});
 $('cover').addEventListener('error', () => {
   $('cover').hidden = true;
-  failedCoverSource = $('cover').getAttribute('src') || '';
   $('favicon').href = '/favicon.svg';
+  clearTimeout(coverRetry);
+  if (coverSource && coverAttempt < 3) {
+    ++coverAttempt;
+    coverRetry = setTimeout(loadArtwork, 1000 * 2 ** coverAttempt);
+  }
 });
 $('nav-cover').addEventListener('load', () => {
   $('nav-cover').hidden = false;

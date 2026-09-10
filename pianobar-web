@@ -8,6 +8,7 @@ import secrets
 import struct
 import codecs
 import contextlib
+import gzip
 import http.server
 import json
 import os
@@ -16,6 +17,7 @@ import pty
 import re
 import select
 import signal
+import shutil
 import stat
 import socket
 import subprocess
@@ -26,7 +28,8 @@ import tty
 import tempfile
 import time
 import webbrowser
-from urllib.parse import urlsplit
+import zlib
+from urllib.parse import quote, urlsplit
 
 
 class Configuration:
@@ -310,6 +313,7 @@ class Session:
         self.library_lock = threading.Lock()
         self.library_signature = None
         self.library_items = []
+        self.download_slots = threading.BoundedSemaphore(2)
         self.audio_lock = threading.Lock()
         self.audio_listeners = {}
         self.clients = Browsers()
@@ -460,6 +464,60 @@ class Session:
                 self.library_signature = signature
             return self.library_items
 
+    @contextlib.contextmanager
+    def download(self, song_id):
+        if not re.fullmatch(r'[0-9a-f]{64}\.mka', song_id):
+            raise ValueError('Invalid saved song.')
+        if not self.download_slots.acquire(blocking=False):
+            raise RuntimeError('Other downloads are being prepared. Try again shortly.')
+        try:
+            song = next((s for s in self.library() if s['id'] == song_id), None)
+            if song is None:
+                raise ValueError('That saved song is no longer available.')
+            with self.condition:
+                directory = self.state.get('cacheDir')
+            fd = os.open(Path(directory) / song_id, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as source, tempfile.TemporaryDirectory(prefix='pianobar-download-') as temporary:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 100 * 1024 * 1024:
+                    raise ValueError('Invalid saved audio file.')
+                input_path = f'/dev/fd/{fd}'
+                probe = subprocess.run(['ffprobe', '-v', 'error', '-protocol_whitelist', 'file,pipe',
+                    '-f', 'matroska', '-select_streams', 'a:0', '-show_entries', 'stream=codec_name',
+                    '-of', 'json', input_path], pass_fds=(fd,), stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, timeout=15)
+                streams = json.loads(probe.stdout).get('streams', [])
+                codec = streams[0].get('codec_name') if streams else None
+                if codec not in ('aac', 'mp3'):
+                    raise ValueError('Unsupported saved audio format.')
+                extension, mime = ('m4a', 'audio/mp4') if codec == 'aac' else ('mp3', 'audio/mpeg')
+                target = Path(temporary) / ('track.' + extension)
+                command = ['ffmpeg', '-nostdin', '-v', 'error', '-y', '-protocol_whitelist', 'file,pipe',
+                           '-f', 'matroska', '-i', input_path]
+                cover = song.get('cover', '')
+                attached = False
+                if re.fullmatch(r'/api/artwork/[0-9a-f]{64}', cover):
+                    with contextlib.suppress(OSError, ValueError):
+                        artwork, art_mime = self.artwork(cover.rsplit('/', 1)[-1])
+                        if art_mime in ('image/jpeg', 'image/png'):
+                            art_path = Path(temporary) / ('cover.png' if art_mime == 'image/png' else 'cover.jpg')
+                            art_path.write_bytes(artwork)
+                            command += ['-i', str(art_path)]
+                            attached = True
+                command += ['-map', '0:a:0', '-map_metadata', '0', '-c:a', 'copy']
+                if attached:
+                    command += ['-map', '1:v:0', '-c:v', 'copy', '-disposition:v:0', 'attached_pic']
+                command += ['-movflags', '+faststart'] if codec == 'aac' else ['-id3v2_version', '3']
+                source.seek(0)
+                subprocess.run(command + [str(target)], pass_fds=(fd,), stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, check=True, timeout=30)
+                title = ' - '.join(s for s in (song.get('artist'), song.get('title')) if s) or 'Saved song'
+                title = re.sub(r'[\x00-\x1f\x7f/\\]', '_', title).strip(' .')[:150] or 'Saved song'
+                with target.open('rb') as audio:
+                    yield audio, mime, title + '.' + extension
+        finally:
+            self.download_slots.release()
+
     def artwork(self, image_id):
         if not re.fullmatch(r'[0-9a-f]{64}', image_id):
             raise ValueError('Invalid artwork ID.')
@@ -590,11 +648,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def accepts_gzip(self):
+        for entry in self.headers.get('Accept-Encoding', '').split(','):
+            parts = entry.strip().lower().split(';')
+            if parts[0] == 'gzip':
+                return not any(re.fullmatch(r'\s*q=0(?:\.0*)?\s*', p) for p in parts[1:])
+        return False
+
     def reply(self, status, data, mime="application/json", headers=None):
+        headers = dict(headers or {})
+        if mime.startswith(('application/json', 'text/')) and len(data) > 1024:
+            headers['Vary'] = 'Accept-Encoding'
+            if self.accepts_gzip():
+                data = gzip.compress(data, compresslevel=3)
+                headers['Content-Encoding'] = 'gzip'
         self.send_response(status)
         self.send_header("Content-Type", mime)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", headers.pop('Cache-Control', 'no-store'))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' https: http:; "
@@ -634,7 +705,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if origin and origin != "http://" + host:
             self.reply(403, b'{"error":"Invalid origin."}')
             return False
-        if self.headers.get("Sec-Fetch-Site") == "cross-site":
+        # Custom Tabs (and links from other sites) may open the main document
+        # cross-site. Permit that navigation, but never cross-site API requests,
+        # embedded frames, or mutations. Authentication and Host checks still apply.
+        navigation = (self.command == 'GET' and urlsplit(self.path).path == '/' and
+                      self.headers.get('Sec-Fetch-Mode') == 'navigate' and
+                      self.headers.get('Sec-Fetch-Dest') == 'document')
+        if self.headers.get("Sec-Fetch-Site") == "cross-site" and not navigation:
             self.reply(403, b'{"error":"Cross-site requests are not allowed."}')
             return False
         return True
@@ -643,6 +720,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if not self.valid_request():
             return
         parsed = urlsplit(self.path)
+        if parsed.path.startswith('/api/download/'):
+            try:
+                with self.server.session.download(parsed.path.removeprefix('/api/download/')) as (audio, mime, name):
+                    self.send_response(200)
+                    self.send_header('Content-Type', mime)
+                    self.send_header('Content-Length', str(os.fstat(audio.fileno()).st_size))
+                    self.send_header('Content-Disposition', 'attachment; filename="pianobar-track.' + name.rsplit('.', 1)[-1] + '"; filename*=UTF-8\'\'' + quote(name, safe=''))
+                    self.send_header('Cache-Control', 'private, no-store')
+                    self.send_header('X-Content-Type-Options', 'nosniff')
+                    self.end_headers()
+                    self.connection.settimeout(30)
+                    with contextlib.suppress(OSError):
+                        shutil.copyfileobj(audio, self.wfile, 65536)
+            except ValueError:
+                self.reply(404, b'{"error":"That saved song cannot be downloaded."}')
+            except (OSError, RuntimeError, subprocess.SubprocessError):
+                self.reply(503, b'{"error":"Could not prepare the download. Try again shortly; the server needs ffmpeg and ffprobe installed."}')
+            return
         if parsed.path == '/api/clients':
             self.reply(200, json.dumps(self.server.session.clients.listing()).encode())
             return
@@ -659,7 +754,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.reply(500, b'{"error":"Could not read settings."}')
             return
         if parsed.path == '/api/audio':
-            listener = queue.Queue(maxsize=12)
+            # Hold roughly three seconds of typical decoder frames during a
+            # network stall, without blocking the native player or growing forever.
+            listener = queue.Queue(maxsize=128)
             session = self.server.session
             client_id = self.headers.get('X-Pianobar-Client')
             try:
@@ -674,6 +771,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/octet-stream')
                 self.send_header('Cache-Control', 'no-store')
+                self.send_header('X-Accel-Buffering', 'no')
+                self.send_header('Vary', 'Accept-Encoding')
+                compressor = zlib.compressobj(3, zlib.DEFLATED, 31) if self.accepts_gzip() else None
+                if compressor:
+                    self.send_header('Content-Encoding', 'gzip')
                 self.send_header('X-Content-Type-Options', 'nosniff')
                 self.end_headers()
                 self.connection.settimeout(5)
@@ -684,8 +786,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         packet = bytes(20)  # Keepalive while paused or between tracks.
                     if not session.clients.allowed(client_id):
                         packet = bytes(20)
+                    if compressor:
+                        packet = compressor.compress(packet) + compressor.flush(zlib.Z_SYNC_FLUSH)
                     self.wfile.write(packet)
                     self.wfile.flush()
+                if compressor:
+                    self.wfile.write(compressor.flush(zlib.Z_FINISH))
             except (OSError, TimeoutError):
                 pass
             finally:
@@ -697,7 +803,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             try:
                 data, mime = self.server.session.artwork(parsed.path.removeprefix('/api/artwork/'))
-                self.reply(200, data, mime)
+                self.reply(200, data, mime, headers={'Cache-Control': 'private, max-age=3600'})
             except (OSError, ValueError):
                 self.reply(404, b'{"error":"Artwork is unavailable."}')
             return
