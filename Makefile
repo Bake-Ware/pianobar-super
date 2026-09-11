@@ -182,4 +182,5 @@ test: pianobar tests/player-driver tests/stations-driver
 	python3 tests/web.py
 	python3 tests/stations.py
 	python3 tests/network.py
+	python3 tests/downloads.py
 	python3 tests/settings.py

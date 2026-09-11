@@ -147,6 +147,7 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True, executable_path=os.environ.get("PIANOBAR_TEST_BROWSER"))
                 page = browser.new_page(viewport={'width': 1440, 'height': 1080}, device_scale_factor=1)
+                page.add_init_script("localStorage.setItem('pianobarAutoListen', 'false')")
                 errors = []
                 page.on('pageerror', lambda error: errors.append(str(error)))
                 page.goto(origin + '/')
@@ -160,6 +161,7 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 # Exercise every configured command in an isolated tab without executing
                 # destructive/online actions; real playback shortcuts are checked below.
                 keys_page = browser.new_page()
+                keys_page.add_init_script("localStorage.setItem('pianobarAutoListen', 'false')")
                 keys_page.goto(origin)
                 keys_page.wait_for_function("() => document.querySelectorAll('[data-shortcut]').length === 32")
                 assert keys_page.locator('[data-shortcut="act_volup"] kbd').text_content() == ']'
