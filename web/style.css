@@ -58,11 +58,39 @@ a {
 .brand-dot {
 	color:var(--orange);
 }
+.brand-name {
+	position:relative;
+	padding-bottom:25px;
+	white-space:nowrap;
+}
+.brand-super {
+	position:absolute;
+	right:-12px;
+	bottom:10px;
+	color:#f12b36;
+	font-family:Impact,"Arial Black","Helvetica Neue",sans-serif;
+	font-size:25px;
+	font-weight:900;
+	font-style:italic;
+	line-height:1;
+	letter-spacing:1px;
+	transform:rotate(-7deg) skewX(-10deg);
+	text-shadow:1px 1px 0 #8a101c,2px 2px 0 #8a101c,3px 3px 0 #420c15;
+}
+.brand-super::after {
+	content:"";
+	display:block;
+	height:3px;
+	margin-top:2px;
+	background:#f12b36;
+	clip-path:polygon(12% 0,100% 0,82% 100%,0 100%);
+}
 .brand-mark {
 	display:flex;
 	align-items:center;
 	gap:3px;
 	margin-right:10px;
+	margin-bottom:25px;
 	height:25px;
 }
 .brand-mark i {
@@ -90,7 +118,7 @@ a {
 .sidebar-label {
 	font-size:9px;
 	color:var(--muted);
-	margin-top:65px;
+	margin-top:5px;
 }
 .nav {
 	display:flex;
