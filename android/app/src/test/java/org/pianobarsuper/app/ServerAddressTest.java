@@ -1,4 +1,4 @@
-package systems.bake.pianobar;
+package org.pianobarsuper.app;
 import org.junit.Test;
 import static org.junit.Assert.*;
 public class ServerAddressTest {

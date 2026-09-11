@@ -11,7 +11,7 @@ WorkingDirectory=/var/lib/pianobar
 Environment=XDG_CONFIG_HOME=/var/lib/pianobar/.config
 Environment=XDG_DATA_HOME=/var/lib/pianobar/.local/share
 Environment=LANG=C.UTF-8
-ExecStart=/usr/local/bin/pianobar --listen 127.0.0.1 --port 8765 --output browser
+ExecStart=/usr/local/bin/pianobar
 Restart=always
 RestartSec=5
 StandardInput=null

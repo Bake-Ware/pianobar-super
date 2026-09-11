@@ -45,6 +45,13 @@ not expose the browser's cookies or downloaded files to the APK. Server-side
 
 ## Build
 
+New builds use the project-specific application ID `org.pianobarsuper.app`.
+This replaces the initial release's domain-based application ID. Android treats
+it as a separate app: configure the server again and import your downloaded
+tracks. Keep the old app until you have recovered any files you need; its private
+library is not automatically migrated. The initial published APK may still use
+the earlier identity; check the release notes before installing.
+
 Install JDK 17 and the Android SDK (`platforms;android-35`, `build-tools;35.0.0`).
 Set `ANDROID_HOME` to the SDK location or create an ignored `local.properties`
 with `sdk.dir=...`. Then:

@@ -1,4 +1,4 @@
-package systems.bake.pianobar;
+package org.pianobarsuper.app;
 
 import android.Manifest;
 import android.app.*;

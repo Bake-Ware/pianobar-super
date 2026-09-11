@@ -1,9 +1,9 @@
 plugins { id 'com.android.application' }
 android {
-    namespace 'systems.bake.pianobar'
+    namespace 'org.pianobarsuper.app'
     compileSdk 35
     defaultConfig {
-        applicationId 'systems.bake.pianobar'
+        applicationId 'org.pianobarsuper.app'
         minSdk 26
         targetSdk 35
         versionCode 1

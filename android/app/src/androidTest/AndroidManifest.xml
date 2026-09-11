@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
-        <provider android:name="systems.bake.pianobar.TestAudioProvider" android:authorities="systems.bake.pianobar.test.audio" android:exported="true" />
+        <provider android:name="org.pianobarsuper.app.TestAudioProvider" android:authorities="org.pianobarsuper.app.test.audio" android:exported="true" />
     </application>
 </manifest>

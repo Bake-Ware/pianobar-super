@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Private config edits, first-run setup and native restart; no Pandora access."""
+import base64
 import contextlib
 import json
 import os
@@ -138,3 +139,26 @@ with tempfile.TemporaryDirectory(prefix='pianobar-settings-') as temporary:
             proc.terminate()
             proc.wait(timeout=8)
         refused.close()
+
+# A persistent web password must authenticate requests without entering logs.
+with tempfile.TemporaryDirectory(prefix='pianobar-password-log-') as temporary:
+    directory = Path(temporary) / 'pianobar'
+    directory.mkdir()
+    web_password = 'test-only-persistent-web-password'
+    (directory / 'web.json').write_text(json.dumps({'password': web_password}))
+    proc = subprocess.Popen([str(ROOT / 'pianobar'), '--listen', '0.0.0.0', '--port', '0', '--output', 'browser'],
+        env=dict(os.environ, XDG_CONFIG_HOME=temporary), stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    try:
+        link = proc.stdout.readline()
+        assert b'Browser interface:' in link
+        origin = re.search(rb'http://localhost:\d+', link)[0].decode()
+        auth = 'Basic ' + base64.b64encode(('pianobar:' + web_password).encode()).decode()
+        with urllib.request.urlopen(urllib.request.Request(origin + '/api/state', headers={'Authorization': auth}), timeout=5) as response:
+            assert response.status == 200
+    finally:
+        proc.terminate()
+        logs, _ = proc.communicate(timeout=8)
+    assert web_password.encode() not in link + logs
+    assert b'Network password:' not in logs
+    print('PASS: saved web password authenticates without appearing in startup logs')

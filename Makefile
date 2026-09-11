@@ -175,6 +175,7 @@ tests/player-driver tests/stations-driver: tests/%: tests/%.c $(filter-out src/m
 	${SILENTCMD}${CC} ${ALL_CFLAGS} -UNDEBUG -I src -o $@ $^ ${ALL_LDFLAGS}
 
 test: pianobar tests/player-driver tests/stations-driver
+	python3 tests/installers.py
 	python3 tests/browsers.py
 	python3 tests/rook.py
 	python3 tests/audio.py

@@ -1,4 +1,4 @@
-package systems.bake.pianobar;
+package org.pianobarsuper.app;
 import android.content.*;
 import android.net.Uri;
 import android.os.SystemClock;
@@ -27,7 +27,7 @@ public class AppTest {
             assertEquals("http://10.0.2.2:8765/", context.getSharedPreferences("connection", 0).getString("server", ""));
             activity.recreate();
             assertTrue(device.wait(Until.hasObject(By.text("http://10.0.2.2:8765/")), 5000));
-            Uri source = Uri.parse("content://systems.bake.pianobar.test.audio/test.wav");
+            Uri source = Uri.parse("content://org.pianobarsuper.app.test.audio/test.wav");
             OfflineLibrary.Track track = library.importTrack(source);
             assertEquals("Offline test.wav", track.title);
             assertEquals(track.id, library.importTrack(source).id);

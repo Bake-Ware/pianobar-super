@@ -899,6 +899,7 @@ def main():
         parser.error('--listen must be an IPv4 or IPv6 address')
     network = not bind_address.is_loopback
     password = defaults.get('password')
+    generated_password = False
     if args.password_file:
         try:
             password = args.password_file.read_text().rstrip('\r\n')
@@ -908,6 +909,7 @@ def main():
             parser.error('The password file is empty')
     elif network and not password:
         password = secrets.token_urlsafe(18)
+        generated_password = True
     location = Path(__file__).resolve().parent
     binary = location / "pianobar"
     if not binary.is_file():
@@ -939,7 +941,7 @@ def main():
         print(f"Network interface: {args.listen}:{server.server_port} (use this computer's LAN address)", flush=True)
     if password:
         print('Network username: pianobar', flush=True)
-        if not args.password_file:
+        if generated_password:
             print('Network password: ' + password, flush=True)
     saved_terminal = termios.tcgetattr(sys.stdin) if sys.stdin.isatty() else None
     def prepare(session):

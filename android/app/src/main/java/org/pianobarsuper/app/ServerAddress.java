@@ -1,4 +1,4 @@
-package systems.bake.pianobar;
+package org.pianobarsuper.app;
 
 import java.net.URI;
 import java.net.URISyntaxException;

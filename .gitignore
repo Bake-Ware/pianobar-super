@@ -30,6 +30,9 @@ tests/stations-driver
 *.p12
 *.pfx
 *.log
+credentials.json
+*.credentials.json
+/.secrets/
 
 # Android distribution artifacts and private signing material
 *.apk
