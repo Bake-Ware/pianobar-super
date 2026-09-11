@@ -127,6 +127,7 @@ your configured keys, including the browser-opening shortcut. Further configurat
 is documented in the [manual](contrib/pianobar.1) and [example config](contrib/config-example).
 The [REST API and optional Rook integration](integrations/README.md) expose controls
 and browser routing for automation.
+See the [installer validation report](docs/validation.md) for tested paths and privacy-review scope.
 
 Screenshots above use fictional music and original generated vector artwork, with
 the actual web UI. To reproduce them in an isolated Python environment:

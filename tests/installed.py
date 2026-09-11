@@ -40,7 +40,8 @@ def request(path, data=None, authorized=True, expected=200):
 def playing():
     for _ in range(100):
         value = request('/api/state')
-        if value['state'].get('title') == 'Installer audio' and not value.get('playerStopped'):
+        if (value['state'].get('title') == 'Installer audio' and
+                not value.get('playerStopped') and not value.get('restarting')):
             return value
         time.sleep(.1)
     raise AssertionError('Fixture did not start')
