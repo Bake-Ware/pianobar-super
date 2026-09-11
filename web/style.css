@@ -1206,6 +1206,8 @@ main > footer { position: fixed; z-index: 2; left: var(--sidebar-width); right: 
 .settings-grid label { display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
 .settings-grid input, .settings-grid select { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font: inherit; border-radius: 0; }
 .settings-hint, #settings-status { font-size: 12px; line-height: 1.7; color: var(--muted); }
+.android-download { display: inline-block; padding: 14px 18px; background: var(--orange); color: #172b2b; font-weight: 700; text-decoration: none; }
+.android-download:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
 .settings-checks { display: grid; gap: 14px; margin-top: 24px; }
 .setting-check { display: flex; align-items: center; gap: 10px; font-size: 12px; line-height: 1.6; }
 .setting-check input { accent-color: var(--orange); }
