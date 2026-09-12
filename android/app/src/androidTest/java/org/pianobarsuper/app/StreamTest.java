@@ -29,7 +29,8 @@ public class StreamTest {
         final ExecutorService workers = Executors.newCachedThreadPool();
         final List<Socket> streams = new CopyOnWriteArrayList<>();
         final AtomicInteger heartbeats = new AtomicInteger(), registrations = new AtomicInteger(), skips = new AtomicInteger();
-        volatile boolean closed, reject;
+        volatile boolean closed, reject, requirePageLogin;
+        volatile String authorization = "Basic fixture";
         final String origin = "http://127.0.0.1:" + server.getLocalPort() + "/";
         Server() throws Exception { workers.execute(() -> { while (!closed) try { Socket socket=server.accept(); workers.execute(() -> handle(socket)); } catch(Exception ignored) {} }); }
         void handle(Socket socket) {
@@ -39,11 +40,11 @@ public class StreamTest {
                 String path = first.split(" ")[1], line; int length = 0; boolean auth = false;
                 while ((line = reader.readLine()) != null && !line.isEmpty()) {
                     if (line.toLowerCase(Locale.ROOT).startsWith("content-length:")) length = Integer.parseInt(line.split(":",2)[1].trim());
-                    if (line.equals("Authorization: Basic fixture")) auth = true;
+                    if (line.toLowerCase(Locale.ROOT).startsWith("authorization:") && line.split(":",2)[1].trim().equals(authorization)) auth = true;
                 }
                 char[] body = new char[length]; int offset=0;
                 while (offset<length) { int n=reader.read(body,offset,length-offset); if(n<0)break; offset+=n; }
-                if (path.equals("/")) {
+                if (path.equals("/") && (!requirePageLogin || auth)) {
                     reply(s,200,"text/html","<html><body><h1>Test station controls</h1><script>fetch('/api/audio').then(r=>document.body.append('Browser audio '+r.status))</script></body></html>"); return;
                 }
                 if (reject || !auth) { reply(s,401,"application/json","{}"); return; }
@@ -71,7 +72,7 @@ public class StreamTest {
         }
         void reply(Socket socket,int code,String mime,String body) throws IOException {
             byte[] bytes=body.getBytes(StandardCharsets.UTF_8);
-            socket.getOutputStream().write(("HTTP/1.1 "+code+" Result\r\nContent-Type: "+mime+"\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().write(("HTTP/1.1 "+code+" Result\r\n"+(code==401 ? "WWW-Authenticate: Basic realm=\"pianobar\"\r\n" : "")+"Content-Type: "+mime+"\r\nContent-Length: "+bytes.length+"\r\nConnection: close\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
             socket.getOutputStream().write(bytes);
         }
         void drop() { for(Socket s: streams)try{s.close();}catch(Exception ignored){} }
@@ -83,8 +84,12 @@ public class StreamTest {
         device.wakeUp(); device.executeShellCommand("wm dismiss-keyguard");
         try(Server server=new Server()) {
             context.getSharedPreferences("connection",0).edit().putString("server",server.origin).commit();
-            NativeConnection.basic.put(server.origin,"Basic fixture");
+            server.requirePageLogin = true; server.authorization = "Basic cGlhbm9iYXI6Zml4dHVyZQ==";
+            NativeConnection.basic.clear();
             try(ActivityScenario<PlayerActivity> activity=ActivityScenario.launch(PlayerActivity.class)) {
+                assertTrue(device.wait(Until.hasObject(By.desc("Web password")),10000));
+                device.findObject(By.desc("Web password")).setText("fixture");
+                device.findObject(By.res("android:id/button1")).click();
                 assertTrue(device.wait(Until.hasObject(By.textContains("Test station controls")),10000));
                 assertTrue(device.wait(Until.hasObject(By.textContains("Browser audio 409")),10000));
                 device.findObject(By.text("Listen")).click();

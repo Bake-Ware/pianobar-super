@@ -84,8 +84,8 @@ public final class PlayerActivity extends Activity {
                     auth.cancel(); return;
                 }
                 LinearLayout fields = new LinearLayout(PlayerActivity.this); fields.setOrientation(LinearLayout.VERTICAL);
-                EditText user = new EditText(PlayerActivity.this); user.setHint("Username"); user.setText("pianobar"); user.setSingleLine();
-                EditText password = new EditText(PlayerActivity.this); password.setHint("Web password");
+                EditText user = new EditText(PlayerActivity.this); user.setContentDescription("Web username"); user.setHint("Username"); user.setText("pianobar"); user.setSingleLine();
+                EditText password = new EditText(PlayerActivity.this); password.setContentDescription("Web password"); password.setHint("Web password");
                 password.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
                 fields.addView(user); fields.addView(password);
                 new AlertDialog.Builder(PlayerActivity.this).setTitle("Sign in to " + host).setView(fields)

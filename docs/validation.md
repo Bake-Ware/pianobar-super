@@ -55,3 +55,16 @@ only for a temporary installer-created server using the synthetic account named
 in that test. It changes settings and creates test music. Do not run it against a
 real library. Use the Proxmox host to remove your test container and its disks after
 testing, and remove any private credential input file supplied by your test runner.
+
+## Native Android streaming (2026-09-12)
+
+The native streaming build passes assembleDebug, JVM unit tests and lintDebug
+(no lint errors; platform/style warnings remain). On an Android 15 / API 35
+emulator, the three device tests pass: existing offline imports/playback, the
+Player WebView/native audio boundary, and 95 seconds of screen-off streaming.
+The streaming test verifies continued AudioTrack sample writes and at least five
+listener heartbeats while the activity is backgrounded, then pause/resume,
+connection recovery, Next, redirect rejection and authentication-expiry shutdown.
+Fixtures use generated PCM and synthetic credentials; the production player and
+library were not changed. Emulator sample delivery does not establish audible
+quality on a physical phone or validate a real proxy identity provider.
