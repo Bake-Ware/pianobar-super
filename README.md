@@ -103,7 +103,9 @@ The [Android release](https://github.com/Bake-Ware/pianobar-super/releases) is a
 linked from the web app's **Settings → Android app**. Android 8.0 or later is required.
 Enter your own server address in the app's Settings; it ships without one.
 
-The player opens in your installed browser using its existing login session.
+The app uses native background audio with lock-screen controls. Sign in inside
+Player, select a station, then tap **Listen**. Its login session is separate from
+your installed browser; see the Android README for proxy login limitations.
 For offline device playback, download songs from the web Library, then use
 **Downloads → Add downloaded tracks** in the APK to import them. These local copies
 play without the server, including with the screen off.

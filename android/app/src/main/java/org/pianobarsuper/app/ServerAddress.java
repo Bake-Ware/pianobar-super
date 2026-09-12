@@ -26,7 +26,7 @@ final class ServerAddress {
         host = host.toLowerCase(Locale.ROOT);
         if (host.equals("localhost") || host.equals("[::1]") || host.equals("::1") || host.endsWith(".local") || host.endsWith(".lan")) return true;
         if (host.startsWith("[fc") || host.startsWith("[fd") || host.startsWith("[fe80:")) return true;
-        String[] parts = host.split("\\.");
+        String[] parts = host.split("[.]");
         if (parts.length != 4) return false;
         int[] octets = new int[4];
         try {
