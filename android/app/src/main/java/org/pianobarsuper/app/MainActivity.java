@@ -10,7 +10,6 @@ import android.os.*;
 import android.text.InputType;
 import android.view.*;
 import android.widget.*;
-import androidx.browser.customtabs.*;
 import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -80,7 +79,7 @@ public final class MainActivity extends Activity {
     }
     private void settings() {
         content.addView(text("Your server", 24, INK));
-        content.addView(text("Connect to any pianobar web server. Sign in through its usual login page.", 14, MUTED));
+        content.addView(text("Connect to any pianobar web server. Sign in inside Player, then tap Listen for native background audio.", 14, MUTED));
         EditText server = new EditText(this); server.setSingleLine(true); server.setTextColor(INK); server.setTextSize(16);
         server.setHint("https://radio.example.com"); server.setHintTextColor(MUTED);
         server.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -97,25 +96,15 @@ public final class MainActivity extends Activity {
         }));
         content.addView(button("Open player", this::openPlayer));
         content.addView(text("HTTPS works over the Internet. Local servers can use HTTP, for example http://192.168.1.10:8765.", 13, MUTED));
-        content.addView(text("The player uses your installed browser, including its sign-in session and audio settings. No account credentials are stored in this app.", 13, MUTED));
+        content.addView(text("Audio runs in an Android media service and continues with the screen locked. Sign in inside the app; existing browser sessions are separate. Web passwords stay in memory until the app exits.", 13, MUTED));
         content.addView(text("pianobar · " + BuildConfig.VERSION_NAME, 12, MUTED));
     }
     private void openPlayer() {
         String address = preferences.getString("server", "");
         if (address.isEmpty()) { render("settings"); Toast.makeText(this, "Enter and save your server address first", Toast.LENGTH_LONG).show(); return; }
-        try {
-            address = ServerAddress.normalize(address);
-            CustomTabsIntent tab = new CustomTabsIntent.Builder().setShowTitle(true).setUrlBarHidingEnabled(true)
-                    .setShareState(CustomTabsIntent.SHARE_STATE_OFF).setColorScheme(CustomTabsIntent.COLOR_SCHEME_SYSTEM)
-                    .setDefaultColorSchemeParams(new CustomTabColorSchemeParams.Builder().setToolbarColor(PAPER).build())
-                    .build();
-            String browser = CustomTabsClient.getPackageName(this, Collections.emptyList());
-            if (browser != null) tab.intent.setPackage(browser);
-            tab.launchUrl(this, Uri.parse(address));
-        } catch (ActivityNotFoundException error) {
-            Toast.makeText(this, "Install a browser such as Chrome or Firefox to open the player.", Toast.LENGTH_LONG).show();
-        } catch (IllegalArgumentException error) { render("settings"); Toast.makeText(this, error.getMessage(), Toast.LENGTH_LONG).show(); }
+        startActivity(new Intent(this, PlayerActivity.class));
     }
+
     private void downloads() {
         content.addView(text("On this device", 24, INK));
         content.addView(text("Download tracks from the server's Library, then add those files here. Imported copies play without a server connection.", 14, MUTED));
@@ -153,6 +142,7 @@ public final class MainActivity extends Activity {
     private void control(String action, String id) {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 42);
+        stopService(new Intent(this, StreamPlayerService.class));
         Intent intent = new Intent(this, OfflinePlayerService.class).setAction(action);
         if (id != null) intent.putExtra("id", id);
         startForegroundService(intent);

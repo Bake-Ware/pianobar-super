@@ -11,21 +11,40 @@ configured**; there are no bundled hostnames, account credentials, or access tok
    `http://192.168.1.10:8765`, then choose **Save server**.
 3. Choose **Player**, and sign in using your server's normal authentication flow.
 
-The server UI opens in an Android Custom Tab. This preserves the web app's
-features and the installed browser's authentication session, including Google
-sign-in behind Cloudflare Access. The browser's security/address toolbar remains
-visible. A compatible installed browser is required; Chrome and Firefox support
-Custom Tabs. Browser playback, autoplay restrictions, and background behavior
-remain those of that browser. This is not a bundled WebView or a native streaming
-engine. Account and server settings remain in the web app; the Android Settings
-screen controls which server to open. Server URLs must be origins without paths,
-queries, or embedded credentials. Public servers require HTTPS; HTTP is allowed
-for local IP addresses and `.local`/`.lan` hosts.
+The Player screen keeps station selection and settings in an in-app WebView, but
+**live audio runs natively in a foreground Android media service**, independently
+of the WebView and its timers. After signing in and selecting a station, tap
+**Listen** above the page. Locking the screen or leaving Player keeps audio running.
+The media notification and lock screen provide Play/Pause, Next and Stop.
+Pause affects this device only; Next advances the shared server player.
+Unplugging headphones pauses playback. Other audio apps and calls obey Android
+audio focus. Starting a downloaded track stops live streaming, and vice versa.
+
+The native service reads the existing framed 16-bit PCM API using AudioTrack;
+no server update or transcoding is required. It maintains its own listener lease,
+refreshes metadata, reconnects after interrupted connections, and holds CPU/Wi-Fi
+locks while listening. Mono/stereo at 8–192 kHz are accepted; malformed and
+oversized frames are rejected. It honors server-side listener volume and routing.
+Concurrent listeners remain unsynchronized across rooms.
+
+Sign in **inside the app**: Custom Tab/browser sessions cannot be imported.
+HTTP Basic web passwords stay in process memory; the WebView's private cookie
+store supports cookie-based proxy sessions. Credentials are only attached to the
+configured origin; native API requests never follow login redirects. If a session
+expires, playback stops and asks you to sign in again. Certificates are validated
+normally; there is no certificate-error bypass or JavaScript-to-native bridge.
+Some identity providers (including Google OAuth) reject embedded browsers. Such
+providers require a supported in-app proxy login method (for example, an already
+configured email-code option) or the password-protected LAN server. This build
+does not add an external-browser OAuth pairing flow or change proxy policy.
+
+Server URLs must be origins without paths, queries, or embedded credentials.
+Public servers require HTTPS; HTTP is allowed for local addresses and local hosts.
 
 ## Download and listen offline
 
-In the server's **Library**, choose **Download** beside a saved song. The browser
-saves the audio file through its normal download flow. Cached AAC exports as M4A,
+In the server's **Library**, choose **Download** beside a saved song. Choose a destination in the Android file picker. The app saves the audio
+using the same authenticated server session. Keep the app running until saving completes. Cached AAC exports as M4A,
 and cached MP3 exports as MP3. Audio is copied without re-encoding; metadata and
 available JPEG/PNG artwork are included. This requires a server version with the
 `/api/download/{saved-song-id}` endpoint and `ffmpeg`/`ffprobe` installed.
@@ -39,8 +58,7 @@ needed. Removing a track deletes only the app's imported copy; the browser's
 original download and server cache are retained. Uninstalling the APK deletes
 its private library. Imports currently accept audio files up to 100 MB each.
 
-Downloading and importing are two explicit steps: Custom Tabs intentionally do
-not expose the browser's cookies or downloaded files to the APK. Server-side
+Downloading and importing are two explicit steps: the saved document remains yours, while the offline library holds its own copy. Server-side
 **Go offline** remains separate from the Android app's on-device library.
 
 ## Build
@@ -94,5 +112,9 @@ Use a disposable Android emulator with API 35, then run:
 These tests reset the app's test configuration/library and verify blank initial
 configuration, server URL persistence, imported-file deduplication, playback
 after the source disappears, background/screen-off playback, pause/resume, and
-removal. Browser sign-in with real accounts requires manual testing on the target
-server; tests do not contain credentials or bypass authentication.
+removal. Live-stream tests use an authenticated local PCM fixture and verify 95 seconds
+of screen-off playback, listener renewal, pause/resume, connection recovery,
+Next, rejection of login redirects, and shutdown on expired authentication.
+Parser unit tests cover fragmented reads, byte order, keepalives and malformed
+frames. Real proxy sign-in and physical-device audio require manual validation;
+tests do not contain real credentials or bypass authentication.

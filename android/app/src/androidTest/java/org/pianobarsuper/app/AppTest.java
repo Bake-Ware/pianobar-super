@@ -18,6 +18,7 @@ public class AppTest {
         OfflineLibrary library = new OfflineLibrary(context);
         for (OfflineLibrary.Track track : library.tracks()) library.remove(track.id);
         UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
+        device.wakeUp(); device.executeShellCommand("wm dismiss-keyguard");
         try (ActivityScenario<MainActivity> activity = ActivityScenario.launch(MainActivity.class)) {
             assertTrue(device.wait(Until.hasObject(By.desc("Server address")), 5000));
             assertEquals("", context.getSharedPreferences("connection", 0).getString("server", ""));
