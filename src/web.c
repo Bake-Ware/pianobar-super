@@ -111,6 +111,34 @@ void BarWebPoll (BarApp_t *app) {
 			} else {
 				BarUiMsg (&app->settings, MSG_ERR, "That station is unavailable.\n");
 			}
+		} else if (strcmp (json_object_get_string (type), "queue_saved") == 0) {
+			json_object *current;
+			const char *name = app->playlist == NULL ? NULL : strrchr (app->playlist->audioUrl, '/');
+			const bool matches = json_object_object_get_ex (message, "current", &current) &&
+				json_object_is_type (current, json_type_string) && name != NULL &&
+				strcmp (name + 1, json_object_get_string (current)) == 0;
+			if (app->offline && app->playlist != NULL && app->modeRequest == 0 && matches) {
+				const char *savedId = json_object_get_string (id);
+				json_object *ids = NULL;
+				const bool multiple = json_object_object_get_ex (message, "ids", &ids);
+				const size_t count = multiple && json_object_is_type (ids, json_type_array) ? json_object_array_length (ids) : 0;
+				PianoSong_t *songs = NULL, *tail = NULL;
+				bool valid = !multiple || (count > 0 && count <= 30);
+				for (size_t i = 0; valid && i < (multiple ? count : (savedId[0] == '\0' ? 0 : 1)); ++i) {
+					json_object *item = multiple ? json_object_array_get_idx (ids, i) : id;
+					if (!json_object_is_type (item, json_type_string) ||
+							(size_t) json_object_get_string_len (item) != strlen (json_object_get_string (item))) { valid = false; break; }
+					PianoSong_t *song = BarCacheLoadOne (&app->settings, json_object_get_string (item));
+					if (song == NULL) { valid = false; break; }
+					if (tail == NULL) { songs = song; } else { tail->head.next = &song->head; }
+					tail = song;
+				}
+				if (valid) {
+					PianoDestroyPlaylist (PianoListNextP (app->playlist));
+					app->playlist->head.next = songs == NULL ? NULL : &songs->head;
+					BarWebState (app);
+				} else { PianoDestroyPlaylist (songs); }
+			}
 		} else if (strcmp (json_object_get_string (type), "play_saved") == 0) {
 			PianoSong_t *song = BarCacheLoadOne (&app->settings, json_object_get_string (id));
 			if (song == NULL) {
@@ -183,6 +211,17 @@ void BarWebState (const BarApp_t *app) {
 	const PianoSong_t *song = app->playlist;
 	const char *savedId = app->offline && song != NULL ? strrchr (song->audioUrl, '/') : NULL;
 	string (object, "savedId", savedId == NULL ? NULL : savedId + 1);
+	const PianoSong_t *queued = app->offline && song != NULL ? PianoListNextP (song) : NULL;
+	const char *queuedId = queued == NULL ? NULL : strrchr (queued->audioUrl, '/');
+	string (object, "queuedSavedId", queuedId == NULL ? NULL : queuedId + 1);
+	string (object, "queuedTitle", queued == NULL ? NULL : queued->title);
+	string (object, "queuedArtist", queued == NULL ? NULL : queued->artist);
+	json_object *queuedIds = json_object_new_array ();
+	for (const PianoSong_t *item = queued; item != NULL && json_object_array_length (queuedIds) < 30; item = PianoListNextP (item)) {
+		const char *name = strrchr (item->audioUrl, '/');
+		if (name != NULL) { json_object_array_add (queuedIds, json_object_new_string (name + 1)); }
+	}
+	json_object_object_add (object, "queuedSavedIds", queuedIds);
 	string (object, "title", song == NULL ? NULL : song->title);
 	string (object, "artist", song == NULL ? NULL : song->artist);
 	string (object, "album", song == NULL ? NULL : song->album);

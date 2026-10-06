@@ -141,7 +141,7 @@ endif
 	install -d ${DESTDIR}${BINDIR}/
 	install -m755 pianobar pianobar-web ${DESTDIR}${BINDIR}/
 	install -d ${DESTDIR}${PREFIX}/share/pianobar/web/
-	install -m644 web/index.html web/app.js web/style.css web/favicon.svg ${DESTDIR}${PREFIX}/share/pianobar/web/
+	install -m644 web/index.html web/app.js web/style.css web/widget.html web/widget.js web/favicon.svg ${DESTDIR}${PREFIX}/share/pianobar/web/
 	install -d ${DESTDIR}${MANDIR}/man1/
 	install -m644 contrib/pianobar.1 ${DESTDIR}${MANDIR}/man1/
 
@@ -159,6 +159,8 @@ uninstall:
 	${DESTDIR}${PREFIX}/share/pianobar/web/index.html \
 	${DESTDIR}${PREFIX}/share/pianobar/web/app.js \
 	${DESTDIR}${PREFIX}/share/pianobar/web/style.css \
+	${DESTDIR}${PREFIX}/share/pianobar/web/widget.html \
+	${DESTDIR}${PREFIX}/share/pianobar/web/widget.js \
 	${DESTDIR}${PREFIX}/share/pianobar/web/favicon.svg \
 	${DESTDIR}/${MANDIR}/man1/pianobar.1 \
 	${DESTDIR}/${LIBDIR}/libpiano.so.0.0.0 \
@@ -181,6 +183,9 @@ test: pianobar tests/player-driver tests/stations-driver
 	python3 tests/audio.py
 	python3 tests/offline.py
 	python3 tests/web.py
+	python3 tests/metadata.py
+	python3 tests/dj.py
+	python3 tests/voice_tts.py
 	python3 tests/stations.py
 	python3 tests/network.py
 	python3 tests/downloads.py

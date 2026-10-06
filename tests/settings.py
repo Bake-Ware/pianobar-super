@@ -40,6 +40,22 @@ with tempfile.TemporaryDirectory(prefix='pianobar-settings-') as temporary:
         assert store.public()['passwordSet'] and store.public()['web']['passwordSet']
         assert stat.S_IMODE(native.stat().st_mode) == 0o600
         assert stat.S_IMODE((store.directory / 'web.json').stat().st_mode) == 0o600
+        store.save({'settings': {'dj': {'llm_url': 'http://kaiju:1234/v1/chat/completions',
+            'model': 'test-model', 'llm_key': 'private-dj-key', 'tts_url': 'https://kaiju:8900/api/voice',
+            'tts_key': 'private-voice-key', 'voice': 'am_onyx', 'tts_ca': '/private/voice-ca.pem',
+            'theme': 'London punk', 'style': 'A lively DJ', 'metadata_network': False}}})
+        dj_public = store.public()['dj']
+        assert dj_public['model'] == 'test-model' and dj_public['theme'] == 'London punk'
+        assert dj_public['llm_keySet'] and dj_public['tts_keySet']
+        assert 'private-dj-key' not in json.dumps(dj_public) and 'private-voice-key' not in json.dumps(dj_public)
+        assert stat.S_IMODE((store.directory / 'dj.json').stat().st_mode) == 0o600
+        store.save({'settings': {'dj': {'llm_key': '', 'tts_key': ''}}})
+        assert store.dj()['llm_key'] == 'private-dj-key' and store.dj()['tts_key'] == 'private-voice-key'
+        with patch.dict(os.environ, {'PIANOBAR_DJ_MODEL': 'environment-model'}):
+            assert store.public()['dj']['model'] == 'environment-model'
+            assert 'model' in store.public()['dj']['overrides']
+        store.save({'settings': {'dj': {'clear_llm_key': True, 'clear_tts_key': True}}})
+        assert not store.public()['dj']['llm_keySet'] and not store.public()['dj']['tts_keySet']
         store.save({'settings': {'password': '', 'cache_songs': False}})
         assert 'password = new-secret\n' in native.read_text()
         original = native.read_bytes()
@@ -47,7 +63,14 @@ with tempfile.TemporaryDirectory(prefix='pianobar-settings-') as temporary:
         for settings in [{'password': 'secret\nuser = injected'}, {'cache_dir': '../outside'},
                          {'audio_buffer_ms': -1}, {'offline': 'yes'}, {'audio_quality': 'bad'},
                          {'web': {'port': 0}}, {'web': {'listen': 'example.com'}},
-                         {'web': {'password': 'secret\x00'}}, {'password_command': 'untrusted command'}]:
+                         {'web': {'password': 'secret\x00'}}, {'password_command': 'untrusted command'},
+                         {'dj': {'llm_url': 'file:///etc/passwd'}}, {'dj': {'tts_url': 'https://user:secret@kaiju/'}},
+                         {'dj': {'metadata_network': 'yes'}}, {'dj': {'tts_ca': 'relative.pem'}},
+                         {'dj': {'tts_key': 'injected\nvalue'}}, {'dj': {'set_mode': 'hours'}},
+                         {'dj': {'set_songs': 0}}, {'dj': {'set_songs': 31}}, {'dj': {'set_songs': True}},
+                         {'dj': {'set_minutes': 121}}, {'dj': {'set_minutes': '15'}},
+                         {'dj': {'play_over_music': 'yes'}}, {'dj': {'dj_name': 'x' * 101}},
+                         {'dj': {'listener_name': 'Bake\nInjected'}}]:
             try:
                 store.save({'settings': settings})
                 raise AssertionError(settings)
@@ -68,6 +91,7 @@ with tempfile.TemporaryDirectory(prefix='pianobar-settings-') as temporary:
         target.rename(native)
         store.save({'settings': {'clearPassword': True}})
         assert not store.ready() and not store.public()['passwordSet']
+        (store.directory / 'dj.json').unlink()
         # Fresh setup below has no saved account or web defaults.
         (store.directory / 'web.json').unlink()
         cache = base / 'songs'

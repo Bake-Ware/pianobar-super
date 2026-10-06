@@ -1,0 +1,6 @@
+#include <winres.h>
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "app.manifest"
+
+#define IDR_APP_ICON 124
+IDR_APP_ICON ICON "app.ico"
