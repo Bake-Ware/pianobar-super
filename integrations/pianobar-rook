@@ -11,24 +11,28 @@ import urllib.request
 
 def request(operation, argument=None):
     reads = {'state': 'state', 'actions': 'actions', 'stations': 'stations',
-             'library': 'library', 'settings': 'settings', 'browsers': 'clients'}
+             'library': 'library', 'settings': 'settings', 'browsers': 'clients',
+             'now-playing': 'now-playing', 'queue': 'queue', 'dj': 'dj'}
     payload = None
     if operation in reads:
         path = '/api/' + reads[operation]
     elif operation.startswith('act_'):
         path, payload = '/api/command', {'action': operation}
-    elif operation in ('command', 'settings-update', 'browser-update'):
+    elif operation in ('command', 'settings-update', 'browser-update', 'dj-control', 'dj-pick', 'dj-introduce'):
         path = {'command': '/api/command', 'settings-update': '/api/settings',
-                'browser-update': '/api/clients/update'}[operation]
+                'browser-update': '/api/clients/update', 'dj-control': '/api/dj/control',
+                'dj-pick': '/api/dj/pick', 'dj-introduce': '/api/dj'}[operation]
         payload = json.loads(argument)
         if not isinstance(payload, dict):
             raise ValueError('Supply a JSON object.')
+    elif operation == 'dj-speak':
+        path, payload = '/api/dj/announce', {'text': argument}
     elif operation == 'route':
         path = '/api/clients/route'
         payload = {'mode': argument} if argument in ('all', 'none') else {'ids': json.loads(argument)}
-    elif operation in ('station', 'saved', 'output'):
+    elif operation in ('station', 'saved', 'output', 'queue-saved'):
         path = '/api/command'
-        payload = {{'station': 'selectStation', 'saved': 'playSaved', 'output': 'output'}[operation]: argument}
+        payload = {{'station': 'selectStation', 'saved': 'playSaved', 'output': 'output', 'queue-saved': 'queueSaved'}[operation]: argument}
     else:
         raise ValueError('Unknown operation. Use actions to discover native controls.')
     headers = {'Content-Type': 'application/json'}
@@ -39,7 +43,7 @@ def request(operation, argument=None):
             headers['Authorization'] = 'Basic ' + base64.b64encode(('pianobar:' + password).encode()).decode()
     origin = os.environ.get('PIANOBAR_API_URL', 'http://127.0.0.1:8765').rstrip('/')
     req = urllib.request.Request(origin + path, None if payload is None else json.dumps(payload).encode(), headers)
-    with urllib.request.urlopen(req, timeout=35) as response:
+    with urllib.request.urlopen(req, timeout=65 if path.startswith('/api/dj') else 35) as response:
         return json.load(response)
 
 

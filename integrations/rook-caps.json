@@ -327,5 +327,71 @@
     "args": [],
     "description": "Invoke act_web. Availability depends on player state. Follow prompts via pianobar-command.",
     "timeout": 45
+  },
+  {
+    "name": "pianobar-now-playing",
+    "command": "/usr/local/bin/pianobar-rook now-playing",
+    "args": [],
+    "description": "Current title, artist, album, playback mode, progress and enriched metadata.",
+    "timeout": 65
+  },
+  {
+    "name": "pianobar-queue",
+    "command": "/usr/local/bin/pianobar-rook queue",
+    "args": [],
+    "description": "Inspect the current queued cached song and DJ station plan.",
+    "timeout": 65
+  },
+  {
+    "name": "pianobar-queue-saved",
+    "command": "/usr/local/bin/pianobar-rook queue-saved {id}",
+    "args": [
+      "id"
+    ],
+    "description": "Queue a saved song by library ID after the current offline song finishes. Use saved to play immediately.",
+    "timeout": 65
+  },
+  {
+    "name": "pianobar-dj",
+    "command": "/usr/local/bin/pianobar-rook dj",
+    "args": [],
+    "description": "Inspect DJ model readiness, current context and cached-song station state.",
+    "timeout": 65
+  },
+  {
+    "name": "pianobar-dj-speak",
+    "command": "/usr/local/bin/pianobar-rook dj-speak {text}",
+    "args": [
+      "text"
+    ],
+    "description": "Speak a DJ line through the Kaiju voice endpoint to browsers with DJ introductions enabled. At most 700 characters.",
+    "timeout": 65
+  },
+  {
+    "name": "pianobar-dj-control",
+    "command": "/usr/local/bin/pianobar-rook dj-control {json}",
+    "args": [
+      "json"
+    ],
+    "description": "Start/stop the cached-song LLM station. JSON: enabled boolean, optional theme and style.",
+    "timeout": 65
+  },
+  {
+    "name": "pianobar-dj-pick",
+    "command": "/usr/local/bin/pianobar-rook dj-pick {json}",
+    "args": [
+      "json"
+    ],
+    "description": "LLM chooses and introduces one cached song. JSON: optional play=true for immediate playback, theme and style. Default queues next.",
+    "timeout": 65
+  },
+  {
+    "name": "pianobar-dj-introduce",
+    "command": "/usr/local/bin/pianobar-rook dj-introduce {json}",
+    "args": [
+      "json"
+    ],
+    "description": "Generate a short introduction for the current song. JSON: optional style. Returns text; use dj-speak to announce it.",
+    "timeout": 65
   }
 ]

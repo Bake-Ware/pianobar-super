@@ -44,7 +44,7 @@ try:
         manifest = json.loads((root / 'integrations/rook-caps.json').read_text())
         assert len(manifest) == len({spec['name'] for spec in manifest}), 'Duplicate capability names'
         for spec in manifest:
-            params = {key: shlex.quote({'targets': 'none', 'mode': 'browser', 'id': 'example', 'json': '{}'}[key])
+            params = {key: shlex.quote({'targets': 'none', 'mode': 'browser', 'id': 'example', 'json': '{}', 'text': 'London punk, coming up!'}[key])
                       for key in spec['args']}
             cmd = spec['command'].replace('/usr/local/bin/pianobar-rook', shlex.quote(str(root / 'integrations/pianobar-rook'))).format(**params)
             result = subprocess.run(cmd, shell=True, env=env, capture_output=True, text=True)

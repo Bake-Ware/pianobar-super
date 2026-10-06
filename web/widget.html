@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#172b2b">
+  <title>pianobar widget</title>
+  <link id="favicon" rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/widget.js" defer></script>
+</head>
+<body class="widget-page">
+  <div id="widget-card" role="region" aria-label="pianobar player">
+    <div class="widget-top">
+      <span id="widget-dot" class="widget-dot" aria-hidden="true"></span>
+      <span id="widget-station" class="widget-station">No station selected</span>
+      <span class="widget-tools">
+        <button id="widget-pin" type="button" hidden aria-pressed="false" aria-label="Keep window on top" title="Always on top"><span class="widget-pin-icon" aria-hidden="true"></span></button>
+        <button id="widget-expand" type="button" hidden aria-label="Open the full player" title="Open the full player">⤢</button>
+      </span>
+    </div>
+    <div class="widget-main">
+      <div class="widget-art" id="widget-art"><div class="record widget-record"><div class="record-label"><span>p</span><small>PIANOBAR</small></div></div><img id="widget-cover" alt="Album artwork" hidden></div>
+      <div class="widget-info">
+        <p id="widget-source" class="widget-eyebrow">YOUR PERSONAL RADIO</p>
+        <h1 id="widget-title">Something good is next.</h1>
+        <p id="widget-artist" class="widget-artist">Connect to your station.</p>
+        <progress id="widget-progress" max="1" value="0" aria-label="Song progress"></progress>
+        <div class="widget-volume">
+          <button type="button" data-action="act_voldown" aria-label="Decrease volume" disabled>−</button>
+          <span id="widget-volume">0 dB</span>
+          <button type="button" data-action="act_volup" aria-label="Increase volume" disabled>+</button>
+        </div>
+      </div>
+    </div>
+    <div class="widget-transport">
+      <button id="widget-love" type="button" class="widget-icon" data-action="act_songlove" aria-label="Love song" aria-pressed="false" disabled>♡</button>
+      <button id="widget-play" type="button" class="widget-play" data-action="act_songpausetoggle" aria-label="Pause playback" disabled>Ⅱ</button>
+      <button type="button" class="widget-icon" data-action="act_songnext" aria-label="Next song" disabled><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16l11-8zM18 4h3v16h-3z"/></svg></button>
+      <span id="widget-status" class="widget-status" role="status"></span>
+    </div>
+  </div>
+</body>
+</html>
