@@ -26,7 +26,7 @@ if (shell) {
     try { window.chrome.webview.postMessage({type: 'widget'}); } catch (_) { }
   });
 }
-const views = {player: 'Now playing', stations: 'Stations', library: 'Library', settings: 'Settings'};
+const views = {player: 'Now playing', stations: 'Stations', playlists: 'Playlists', library: 'Library', settings: 'Settings'};
 let voiceSampleController = null, voiceSampleAudio = null, voiceSampleURL = null;
 $('sidebar-tools-toggle').addEventListener('click', () => {
   const open = document.querySelector('.sidebar').classList.toggle('tools-open');
@@ -48,6 +48,7 @@ function showView(view, focus = false) {
     else link.removeAttribute('aria-current');
   });
   if (view === 'library') queueMicrotask(refreshLibrary);
+  if (view === 'playlists') queueMicrotask(() => { refreshLibrary(); loadPlaylists(); });
   if (view === 'settings') queueMicrotask(loadSettings);
   requestAnimationFrame(followTranscript);
   if (focus) {
@@ -65,6 +66,10 @@ showView(location.hash.slice(1));
 let snapshot = {state: {}, prompt: {}}, revision = -1, renderedActions = '', promptId = -1;
 let sending = false, noticeTimer;
 let savedSongs = [], libraryBusy = false, libraryRenderKey = '', libraryDirectory = '';
+let playlists = [], playlistRun = null, playlistSelected = null, playlistsLoaded = false, playlistRenderKey = '';
+let playlistDeleteArmed = null;
+try { playlistSelected = localStorage.getItem('pianobarPlaylist'); } catch (_) {}
+const playlistArtwork = new Map();
 let stationRenderKey = '';
 let audioContext, audioController, audioNextTime = 0, audioEpoch = null, desiredOutput = null;
 let browserId = null, browserRegistration, browserDesired = false, browserStatus = 'idle';
@@ -280,9 +285,16 @@ function libraryRow(song, scope) {
   download.href = '/api/download/' + encodeURIComponent(song.id);
   download.setAttribute('download', '');
   download.setAttribute('aria-label', 'Download ' + songLabel(song));
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'saved-add';
+  add.textContent = '＋';
+  add.title = 'Add to playlist';
+  add.setAttribute('aria-label', 'Add ' + songLabel(song) + ' to a playlist');
+  add.addEventListener('click', () => openPlaylistPicker([song.id], songLabel(song) + (song.artist ? ' · ' + song.artist : '')));
   const actions = document.createElement('div');
   actions.className = 'saved-song-actions';
-  actions.append(play, download);
+  actions.append(play, add, download);
   row.append(libraryArtwork(song), info, duration, actions);
   libraryRows.set(key, {signature, row, detail, song});
   return row;
@@ -367,6 +379,7 @@ function continueLibraryQueue() {
 }
 function renderLibrary() {
   continueLibraryQueue();
+  renderPlaylists();
   const query = $('library-search').value.trim().toLocaleLowerCase();
   const currentId = snapshot.state.savedId || '';
   const key = JSON.stringify([savedSongs, query, currentId, libraryGroup]);
@@ -681,6 +694,7 @@ function render(data) {
   renderArtwork([source, !state.offline ? state.cover : '', state.metadata?.cover].filter(url => typeof url === 'string' && (/^https?:\/\//i.test(url) || /^\/api\/artwork\/[0-9a-f]{64}$/.test(url))));
   renderMetadata(state);
   renderDJ(data);
+  playlistRun = data.playlist || null;
   const transcript = $('transcript');
   const output = data.output || 'Waiting for the player…';
   if (transcript.textContent !== output) {
@@ -1017,8 +1031,14 @@ function renderMetadata(state) {
   $('song-metadata').textContent = [genres && (metadata.genreScope === 'artist' ? `Artist genres: ${genres}` : genres), metadata.releaseDate].filter(Boolean).join(' · ');
   $('song-metadata').hidden = !$('song-metadata').textContent;
   const recordingId = metadata.recordingId || '';
-  $('metadata-source').hidden = !/^[0-9a-f-]{36}$/.test(recordingId);
-  if (!$('metadata-source').hidden) $('metadata-source').href = 'https://musicbrainz.org/recording/' + recordingId;
+  // Without a matched recording, search MusicBrainz instead.
+  const matched = /^[0-9a-f-]{36}$/.test(recordingId);
+  $('metadata-source').hidden = false;
+  $('metadata-source').href = matched ? 'https://musicbrainz.org/recording/' + recordingId :
+    'https://musicbrainz.org/search?type=recording&method=indexed&query=' +
+    encodeURIComponent(`recording:"${state.title || ''}" AND artist:"${state.artist || ''}"`);
+  $('metadata-source').title = matched ? 'MusicBrainz' : 'Search MusicBrainz';
+  $('metadata-source').setAttribute('aria-label', matched ? 'Open this recording on MusicBrainz' : 'Search MusicBrainz for this song');
 }
 
 function followTranscript() {
@@ -1339,5 +1359,221 @@ async function watch() {
 }
 watch();
 setInterval(() => {
-  if (!snapshot.exited && document.body.dataset.view === 'library' && !document.hidden) refreshLibrary();
+  if (!snapshot.exited && ['library', 'playlists'].includes(document.body.dataset.view) && !document.hidden) refreshLibrary();
 }, 5000);
+
+// Playlists: stored and played by the server; songs come from the saved library.
+async function loadPlaylists() {
+  try {
+    const data = await djJSON('/api/playlists');
+    playlists = data.playlists;
+    playlistRun = data.run;
+    playlistsLoaded = true;
+    renderPlaylists();
+  } catch (error) { $('playlist-empty').textContent = error.message; }
+}
+async function playlistRequest(path, message) {
+  try { return await djJSON(path, message); }
+  catch (error) { notify(error.message); return null; }
+}
+function selectPlaylist(id) {
+  playlistSelected = id;
+  try { localStorage.setItem('pianobarPlaylist', id); } catch (_) {}
+  renderPlaylists();
+}
+function storePlaylist(playlist) {
+  const index = playlists.findIndex(item => item.id === playlist.id);
+  if (index >= 0) playlists[index] = playlist; else playlists.push(playlist);
+  renderPlaylists();
+}
+const savePlaylist = async change => {
+  const playlist = await playlistRequest('/api/playlists/save', change);
+  if (playlist) storePlaylist(playlist);
+  return playlist;
+};
+function playlistDuration(seconds) {
+  const minutes = Math.round(seconds / 60);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)} hr ${minutes % 60} min` : `${minutes} min`;
+}
+function renderPlaylists() {
+  if (!playlistsLoaded) return;
+  const songsById = new Map(savedSongs.map(song => [song.id, song]));
+  const currentId = snapshot.state.savedId || '';
+  const key = JSON.stringify([playlists, playlistSelected, savedSongs.length, currentId, playlistRun, playlistDeleteArmed,
+    snapshot.djStation?.llmReady, snapshot.djStation?.settings?.dj_name]);
+  if (key === playlistRenderKey) return;
+  playlistRenderKey = key;
+  const station = snapshot.djStation || {};
+  $('dj-playlist-form').hidden = !station.llmReady;
+  $('dj-playlist-who').textContent = station.settings?.dj_name ? 'Ask ' + station.settings.dj_name : 'Ask your DJ';
+  if (!playlists.some(item => item.id === playlistSelected)) playlistSelected = playlists[0]?.id || null;
+  $('playlist-list').replaceChildren(...playlists.map(playlist => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'playlist-card';
+    button.setAttribute('aria-pressed', String(playlist.id === playlistSelected));
+    button.classList.toggle('playing', playlistRun?.id === playlist.id);
+    const name = document.createElement('strong');
+    name.textContent = playlist.name;
+    const detail = document.createElement('small');
+    detail.textContent = `${playlist.songs.length} ${playlist.songs.length === 1 ? 'song' : 'songs'}` +
+      (playlist.by === 'dj' ? ' · by the DJ' : '') + (playlistRun?.id === playlist.id ? ' · playing' : '');
+    button.append(name, detail);
+    button.addEventListener('click', () => selectPlaylist(playlist.id));
+    return button;
+  }));
+  const playlist = playlists.find(item => item.id === playlistSelected);
+  $('playlist-empty').hidden = !!playlist;
+  $('playlist-view').hidden = !playlist;
+  if (!playlist) return;
+  if (document.activeElement !== $('playlist-name')) $('playlist-name').value = playlist.name;
+  if (document.activeElement !== $('playlist-description')) $('playlist-description').value = playlist.description || '';
+  const available = playlist.songs.filter(id => songsById.has(id));
+  const total = available.reduce((sum, id) => sum + (songsById.get(id).duration || 0), 0);
+  $('playlist-meta').textContent = [`${playlist.songs.length} ${playlist.songs.length === 1 ? 'song' : 'songs'}`, total ? playlistDuration(total) : '',
+    playlist.by === 'dj' ? 'made by your DJ' : '', available.length < playlist.songs.length ? `${playlist.songs.length - available.length} no longer saved` : '']
+    .filter(Boolean).join(' · ');
+  const running = playlistRun?.id === playlist.id;
+  $('playlist-play').disabled = $('playlist-shuffle').disabled = !available.length;
+  $('playlist-stop').hidden = !running;
+  $('playlist-delete').textContent = playlistDeleteArmed === playlist.id ? 'Really delete?' : 'Delete';
+  const move = (from, to) => {
+    const songs = [...playlist.songs];
+    songs.splice(to, 0, ...songs.splice(from, 1));
+    savePlaylist({id: playlist.id, songs});
+  };
+  const control = (label, text, handler, disabled = false) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = text;
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    button.disabled = disabled;
+    button.addEventListener('click', handler);
+    return button;
+  };
+  $('playlist-songs').replaceChildren(...playlist.songs.map((id, index) => {
+    const song = songsById.get(id);
+    const row = document.createElement('li');
+    row.className = 'playlist-song';
+    row.classList.toggle('missing', !song);
+    row.classList.toggle('current', !!song && id === currentId);
+    let art = playlistArtwork.get(id);
+    if (!art) playlistArtwork.set(id, art = libraryArtwork(song || {}));
+    const info = document.createElement('div');
+    info.className = 'saved-song-info';
+    const title = document.createElement('p');
+    title.className = 'saved-song-title';
+    title.textContent = song ? songLabel(song) : 'Song no longer saved';
+    const detail = document.createElement('p');
+    detail.className = 'saved-song-detail';
+    detail.textContent = song ? [song.artist, song.album].filter(Boolean).join(' · ') : '';
+    info.append(title, detail);
+    const duration = document.createElement('span');
+    duration.className = 'saved-song-duration';
+    duration.textContent = song ? time(song.duration) : '';
+    const actions = document.createElement('div');
+    actions.className = 'playlist-song-actions';
+    const label = song ? songLabel(song) : 'this song';
+    actions.append(
+      control('Play from ' + label, '▶', () => playPlaylist({id: playlist.id, start: index}), !song),
+      control('Move ' + label + ' up', '↑', () => move(index, index - 1), index === 0),
+      control('Move ' + label + ' down', '↓', () => move(index, index + 1), index === playlist.songs.length - 1),
+      control('Remove ' + label, '✕', () => savePlaylist({id: playlist.id, songs: playlist.songs.filter(item => item !== id)})));
+    row.append(art, info, duration, actions);
+    return row;
+  }));
+}
+async function playPlaylist(message) {
+  const run = await playlistRequest('/api/playlists/play', message);
+  if (run) { playlistRun = run; renderPlaylists(); }
+}
+$('playlist-play').addEventListener('click', () => playPlaylist({id: playlistSelected}));
+$('playlist-shuffle').addEventListener('click', () => playPlaylist({id: playlistSelected, shuffle: true}));
+$('playlist-stop').addEventListener('click', async () => {
+  if (await playlistRequest('/api/playlists/stop', {})) { playlistRun = null; renderPlaylists(); }
+});
+$('playlist-delete').addEventListener('click', async () => {
+  const id = playlistSelected;
+  if (playlistDeleteArmed !== id) {
+    playlistDeleteArmed = id;
+    renderPlaylists();
+    setTimeout(() => { if (playlistDeleteArmed === id) { playlistDeleteArmed = null; renderPlaylists(); } }, 4000);
+    return;
+  }
+  playlistDeleteArmed = null;
+  if (await playlistRequest('/api/playlists/delete', {id})) {
+    playlists = playlists.filter(item => item.id !== id);
+    renderPlaylists();
+  }
+});
+$('playlist-name').addEventListener('change', event => {
+  if (event.target.value.trim()) savePlaylist({id: playlistSelected, name: event.target.value});
+});
+$('playlist-name').addEventListener('keydown', event => { if (event.key === 'Enter') event.target.blur(); });
+$('playlist-description').addEventListener('change', event => savePlaylist({id: playlistSelected, description: event.target.value}));
+$('new-playlist').addEventListener('click', async () => {
+  let number = playlists.length + 1;
+  while (playlists.some(item => item.name === `New playlist ${number}`)) ++number;
+  const playlist = await savePlaylist({name: `New playlist ${number}`, songs: []});
+  if (!playlist) return;
+  selectPlaylist(playlist.id);
+  $('playlist-name').focus();
+  $('playlist-name').select();
+});
+$('dj-playlist-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const who = snapshot.djStation?.settings?.dj_name || 'Your DJ';
+  $('dj-playlist-make').disabled = true;
+  $('dj-playlist-status').textContent = `${who} is digging through your crates…`;
+  try {
+    const playlist = await djJSON('/api/dj/playlist', {description: $('dj-playlist-prompt').value, count: Number($('dj-playlist-count').value)});
+    $('dj-playlist-prompt').value = '';
+    $('dj-playlist-status').textContent = `Made “${playlist.name}”.`;
+    storePlaylist(playlist);
+    selectPlaylist(playlist.id);
+  } catch (error) {
+    $('dj-playlist-status').textContent = error.message;
+  } finally { $('dj-playlist-make').disabled = false; }
+});
+$('dj-playlist-prompt').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('dj-playlist-form').requestSubmit(); }
+});
+let pickerSongs = [];
+async function openPlaylistPicker(ids, label) {
+  pickerSongs = ids;
+  if (!playlistsLoaded) await loadPlaylists();
+  $('playlist-picker-song').textContent = label;
+  $('playlist-picker-name').value = '';
+  $('playlist-picker-list').replaceChildren(...playlists.map(playlist => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'playlist-card';
+    const name = document.createElement('strong');
+    name.textContent = playlist.name;
+    const detail = document.createElement('small');
+    const has = ids.every(id => playlist.songs.includes(id));
+    detail.textContent = has ? 'Already added' : `${playlist.songs.length} songs`;
+    button.disabled = has;
+    button.append(name, detail);
+    button.addEventListener('click', async () => {
+      $('playlist-picker').close();
+      const saved = await playlistRequest('/api/playlists/add', {id: playlist.id, songs: ids});
+      if (saved) { storePlaylist(saved); notify(`Added to “${saved.name}”.`); }
+    });
+    return button;
+  }));
+  $('playlist-picker').showModal();
+  (playlists.length ? $('playlist-picker-list').querySelector('button:not(:disabled)') || $('playlist-picker-name') : $('playlist-picker-name')).focus();
+}
+async function createFromPicker() {
+  const name = $('playlist-picker-name').value.trim();
+  if (!name) { $('playlist-picker-name').focus(); return; }
+  $('playlist-picker').close();
+  const saved = await savePlaylist({name, songs: pickerSongs});
+  if (saved) notify(`Added to “${saved.name}”.`);
+}
+$('playlist-picker-create').addEventListener('click', createFromPicker);
+$('playlist-picker-name').addEventListener('keydown', event => {
+  if (event.key === 'Enter') { event.preventDefault(); createFromPicker(); }
+});

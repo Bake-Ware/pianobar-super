@@ -42,7 +42,15 @@ class DJTests(unittest.TestCase):
                 calls.append((self.path, message, self.headers.get('Authorization')))
                 if self.path == '/chat':
                     content = 'Coming at ya with Kid Cudi and Dat New New.'
-                    context = json.loads(message['messages'][1]['content'])
+                    user = message['messages'][1]['content']
+                    if '\n\nCandidates:\n' in user:
+                        # Playlist request: pick by artist, plus an invalid and a repeated number.
+                        lines = user.split('\n\nCandidates:\n', 1)[1].split('\n')
+                        number = lambda artist: next(int(line.split('\t')[0]) for line in lines if line.split('\t')[1] == artist)
+                        content = 'Sure! ' + json.dumps(dict(name='Rainy Day Riot', description='Punk for grey skies.',
+                            songs=[number('The Clash'), number('Kid Cudi'), 999, number('The Clash')]))
+                        user = '{}'
+                    context = json.loads(user)
                     if 'candidates' in context:
                         content = json.dumps(dict(id=context['candidates'][0]['id'], text='Coming at ya with the next cached song!'))
                     body = json.dumps({'message': {'content': content}}).encode()
@@ -471,6 +479,75 @@ class DJTests(unittest.TestCase):
         self.assertEqual(self.session.dj.generate.call_count, 1)
         self.session.exited = True
         self.session.dj.intro_event.set()
+
+    def test_playlists_are_saved_edited_and_played_through_the_queue(self):
+        import tempfile, time
+        from unittest.mock import Mock
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.session.playlists.configuration.directory = Path(directory.name)
+        ids = [c * 64 + '.mka' for c in 'abcd']
+        songs = [dict(id=i, title='Song ' + str(n), artist='Artist ' + str(n), album='', duration=180, genres=[]) for n, i in enumerate(ids)]
+        self.session.library = lambda: songs
+        self.assertEqual(self.request('/api/playlists'), dict(playlists=[], run=None))
+        made = self.request('/api/playlists/save', {'name': '  Late   night ', 'songs': ids[:2]})
+        self.assertEqual((made['name'], made['songs'], made['by']), ('Late night', ids[:2], 'you'))
+        self.request('/api/playlists/add', {'id': made['id'], 'songs': [ids[1], ids[2]]})
+        edited = self.request('/api/playlists/save', {'id': made['id'], 'description': 'Quiet ones', 'songs': [ids[2], ids[0], ids[1]]})
+        self.assertEqual(edited['songs'], [ids[2], ids[0], ids[1]])
+        self.assertEqual(json.loads((Path(directory.name) / 'playlists.json').read_text())['playlists'][0]['description'], 'Quiet ones')
+        self.assertEqual(os.stat(Path(directory.name) / 'playlists.json').st_mode & 0o777, 0o600)
+        for bad in ({'name': ''}, {'name': 'x', 'songs': ['../etc/passwd']}, {'id': 'missing', 'name': 'x'}, {'name': 'x', 'extra': 1}):
+            self.request('/api/playlists/save', bad, expected=400)
+        # Playing starts the first song, then keeps the player's queue filled.
+        self.session.status = Mock()
+        self.session.state.update(savedId=ids[3], title='Song 3', artist='Artist 3', offline=True, queuedSavedIds=[])
+        self.session.dj.station['enabled'] = True
+        run = self.request('/api/playlists/play', {'id': made['id']})
+        self.assertEqual((run['id'], run['total']), (made['id'], 3))
+        self.assertFalse(self.session.dj.station['enabled'])
+        packets = lambda kind: [p for p in (json.loads(c.args[0]) for c in self.session.status.send.call_args_list) if p['type'] == kind]
+        self.assertEqual(packets('play_saved'), [dict(type='play_saved', id=ids[2])])
+        self.session.pending = False
+        self.session.state.update(savedId=ids[2], title='Song 2', artist='Artist 2')
+        self.session.playlists.on_state(dict(self.session.state))
+        deadline = time.monotonic() + 3
+        while not packets('queue_saved') and time.monotonic() < deadline: time.sleep(.01)
+        packet = packets('queue_saved')[0]
+        self.assertEqual((packet['ids'], packet['current']), ([ids[0], ids[1]], ids[2]))
+        self.assertEqual(self.request('/api/playlists')['run']['position'], 0)
+        self.session.pending = False
+        self.session.state.update(savedId=ids[0], title='Song 0', artist='Artist 0', queuedSavedIds=[ids[1]])
+        self.session.playlists.on_state(dict(self.session.state))
+        time.sleep(.1)
+        self.assertEqual(len(packets('queue_saved')), 1)
+        self.assertEqual(self.session.playlists.run_public()['position'], 1)
+        # Anything else playing ends the run.
+        self.session.state.update(savedId=ids[3], title='Song 3', artist='Artist 3', queuedSavedIds=[])
+        self.session.playlists.on_state(dict(self.session.state))
+        self.assertIsNone(self.request('/api/playlists')['run'])
+        self.request('/api/playlists/delete', {'id': made['id']})
+        self.assertEqual(self.request('/api/playlists')['playlists'], [])
+        self.request('/api/playlists/delete', {'id': made['id']}, expected=400)
+
+    def test_dj_makes_a_playlist_from_a_description(self):
+        import tempfile
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.session.playlists.configuration.directory = Path(directory.name)
+        clash, cudi = 'b' * 64 + '.mka', 'a' * 64 + '.mka'
+        songs = [dict(id=cudi, artist='Kid Cudi', title='Dat New New', album='', duration=200, genres=['hip hop']),
+                 dict(id=clash, artist='The Clash', title='London Calling', album='London Calling', duration=200, genres=['punk'])]
+        songs += [dict(id=f'{n:064x}.mka', artist=f'Filler {n}', title=f'Song {n}', album='', duration=100, genres=[]) for n in range(16, 40)]
+        self.session.library = lambda: songs
+        made = self.request('/api/dj/playlist', {'description': 'Rainy punk afternoon', 'count': 10})
+        self.assertEqual((made['name'], made['description'], made['by']), ('Rainy Day Riot', 'Punk for grey skies.', 'dj'))
+        self.assertEqual(made['songs'], [clash, cudi])
+        sent = self.calls[-1][1]['messages'][1]['content'].split('\n\nCandidates:\n', 1)[1].split('\n')
+        self.assertEqual(sent[0].split('\t')[1], 'The Clash')  # matching songs come first
+        self.assertEqual(self.request('/api/playlists')['playlists'][0]['id'], made['id'])
+        for bad in ({}, {'description': 'x', 'count': 2}, {'description': 'x', 'extra': True}):
+            self.request('/api/dj/playlist', bad, expected=400)
 
     def test_hopping_queues_each_station_once_and_announces_the_switch(self):
         import time

@@ -17,6 +17,7 @@
     <nav class="primary-nav" aria-label="Main navigation">
     <a class="nav active" href="#player" data-view="player" aria-current="page"><span id="nav-player-icon" aria-hidden="true">◉</span><img id="nav-cover" alt="" hidden> Now playing</a>
     <a class="nav" href="#stations" data-view="stations"><span aria-hidden="true"><svg class="nav-icon" viewBox="0 0 24 24" focusable="false"><path d="M7 7.5 17.5 3"/><rect x="2.5" y="7.5" width="19" height="13" rx="2"/><circle cx="15.5" cy="14" r="3"/><path d="M6 11.5h4M6 14.5h4M6 17.5h4"/></svg></span> Stations</a>
+    <a class="nav" href="#playlists" data-view="playlists"><span aria-hidden="true"><svg class="nav-icon" viewBox="0 0 24 24" focusable="false"><path d="M3 6h12M3 11h12M3 16h7"/><path d="M19 4v11.5"/><circle cx="16.5" cy="16.5" r="2.5"/><path d="M19 4l2.5 1"/></svg></span> Playlists</a>
     <a class="nav" href="#library" data-view="library"><span>▤</span> Library</a>
     <a class="nav" href="#settings" data-view="settings"><span>⚙</span> Settings</a>
     </nav>
@@ -76,6 +77,29 @@
     <section id="saved-library" data-views="library" class="saved-library control-card" aria-labelledby="saved-title"><div class="saved-heading"><div><p class="eyebrow">AVAILABLE OFFLINE</p><h3 id="saved-title">Saved songs <span id="saved-count">0</span></h3></div><button id="refresh-library" type="button">Refresh</button></div><div class="library-tabs" role="tablist" aria-label="Group your library">
         <button type="button" role="tab" id="library-tab-songs" data-group="songs" aria-selected="true">Songs</button><button type="button" role="tab" id="library-tab-artists" data-group="artists" aria-selected="false">Artists</button><button type="button" role="tab" id="library-tab-albums" data-group="albums" aria-selected="false">Albums</button><button type="button" role="tab" id="library-tab-genres" data-group="genres" aria-selected="false">Genres</button>
       </div><label class="search-label" for="library-search">Search your saved music</label><input id="library-search" type="search" placeholder="Song, artist, album or genre…" autocomplete="off"><p id="library-message" role="status">Open Library to see your saved songs.</p><div id="saved-songs" role="tabpanel"></div></section>
+    <section id="playlists-page" data-views="playlists" class="control-card" aria-labelledby="playlists-title">
+      <div class="section-heading playlists-heading"><div><p class="eyebrow">YOUR MIXES</p><h1 id="playlists-title">Playlists</h1></div><button id="new-playlist" class="playlist-button" type="button">＋ New playlist</button></div>
+      <form id="dj-playlist-form" class="dj-playlist" hidden>
+        <label for="dj-playlist-prompt"><span id="dj-playlist-who">Ask your DJ</span> to make you one</label>
+        <textarea id="dj-playlist-prompt" rows="2" maxlength="700" placeholder="Rainy Sunday morning: mellow, acoustic, nothing too sad…" required></textarea>
+        <div class="dj-playlist-row"><label for="dj-playlist-count">Songs</label><select id="dj-playlist-count"><option>10</option><option selected>20</option><option>30</option><option>45</option><option>60</option></select><button id="dj-playlist-make" class="playlist-button primary" type="submit">Make it</button><span id="dj-playlist-status" role="status"></span></div>
+      </form>
+      <div class="playlists-layout">
+        <div id="playlist-list" class="playlist-list" aria-label="Your playlists"></div>
+        <div id="playlist-detail" class="playlist-detail" aria-live="polite">
+          <p id="playlist-empty" class="playlist-empty">Make a playlist, ask the DJ for one, or add songs from your Library with ＋.</p>
+          <div id="playlist-view" hidden>
+            <div class="playlist-head">
+              <input id="playlist-name" class="playlist-name" maxlength="80" aria-label="Playlist name" autocomplete="off">
+              <textarea id="playlist-description" class="playlist-description" rows="1" maxlength="500" placeholder="Add a description" aria-label="Playlist description"></textarea>
+              <p id="playlist-meta" class="playlist-meta"></p>
+              <div class="playlist-actions"><button id="playlist-play" class="playlist-button primary" type="button">▶ Play</button><button id="playlist-shuffle" class="playlist-button" type="button">⤨ Shuffle</button><button id="playlist-stop" class="playlist-button" type="button" hidden>■ Stop playlist</button><button id="playlist-delete" class="playlist-button danger" type="button">Delete</button></div>
+            </div>
+            <ol id="playlist-songs" class="playlist-songs"></ol>
+          </div>
+        </div>
+      </div>
+    </section>
     <section id="settings-page" data-views="settings" class="control-card" aria-labelledby="settings-title">
       <p class="eyebrow">YOUR PLAYER, YOUR WAY</p><h1 id="settings-title">Settings</h1>
       <p id="setup-message" hidden>Add your Pandora account to start listening, or choose offline startup to use a saved library.</p>
@@ -185,6 +209,7 @@
     <footer><span id="cache-note">Songs save automatically when loaded.</span><span>Good music. Your pace.</span></footer>
   </main>
   <div id="notice" role="status" hidden></div>
+  <dialog id="playlist-picker" aria-labelledby="playlist-picker-title"><form method="dialog" class="playlist-picker"><h2 id="playlist-picker-title">Add to playlist</h2><p id="playlist-picker-song" class="playlist-meta"></p><div id="playlist-picker-list" class="playlist-picker-list"></div><div class="playlist-picker-new"><input id="playlist-picker-name" maxlength="80" placeholder="New playlist name" aria-label="New playlist name" autocomplete="off"><button id="playlist-picker-create" class="playlist-button primary" type="button">Create</button></div><button class="playlist-button" value="cancel">Cancel</button></form></dialog>
   <dialog id="prompt-dialog" aria-labelledby="prompt-title"><div class="dialog-heading"><div><p class="eyebrow">KEEP THE MUSIC PERSONAL</p><h2 id="prompt-title">One more thing…</h2></div><span class="prompt-badge">PLAYER REQUEST</span></div><p class="dialog-hint">Choose an option or type your answer below.</p><p id="delete-confirmation" hidden></p><pre id="prompt-output"></pre><div id="prompt-options"></div><form id="prompt-form"><label for="answer" id="answer-label">Your answer</label><div class="answer-row"><input id="answer" autocomplete="off" spellcheck="false"><button class="submit-button" type="submit">Continue ↗</button></div></form><p class="dialog-footnote">All station, discovery, and account actions are available here.</p></dialog>
 </body>
 </html>
