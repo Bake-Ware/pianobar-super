@@ -1754,3 +1754,6 @@ body[data-pinned="true"] #widget-pin {
     .playlist-song .saved-song-duration { display: none; }
     .saved-song-actions .saved-add { min-height: 44px; }
 }
+.playlist-crumb { color: var(--orange); text-decoration: none; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.playlist-crumb:hover { text-decoration: underline; }
+.playlist-crumb[hidden], .breadcrumb-separator[hidden] { display: none; }

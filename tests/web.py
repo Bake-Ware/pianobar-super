@@ -379,6 +379,8 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 page.wait_for_function("titles => snapshot.state.title === titles[0] && snapshot.playlist?.name === 'Highway songs'", arg=first_titles[::-1])
                 page.wait_for_function("() => document.querySelector('#playlist-songs .playlist-song.current') && !document.getElementById('playlist-stop').hidden")
                 page.wait_for_function("() => (snapshot.state.queuedSavedIds || []).length === 1")
+                assert page.locator('#playlist-crumb').text_content() == '♪ Highway songs' and page.locator('#playlist-crumb').is_visible()
+                assert page.locator('#source').text_content() == 'PLAYLIST · HIGHWAY SONGS · 1 OF 2'
                 page.screenshot(path='/tmp/pianobar-playlists.png')
                 page.set_viewport_size({'width': 390, 'height': 844})
                 assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
@@ -386,6 +388,7 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 page.set_viewport_size({'width': 1280, 'height': 900})
                 page.locator('#playlist-stop').click()
                 page.wait_for_function("() => document.getElementById('playlist-stop').hidden")
+                page.wait_for_function("() => document.getElementById('playlist-crumb').hidden")
                 page.locator('#playlist-delete').click()
                 assert page.locator('#playlist-delete').text_content() == 'Really delete?'
                 page.locator('#playlist-delete').click()

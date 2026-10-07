@@ -664,7 +664,15 @@ function render(data) {
     history.replaceState(null, '', '#settings');
     showView('settings');
   }
-  $('source').textContent = state.offline ? 'FROM YOUR OFFLINE LIBRARY' : 'YOUR PERSONAL RADIO';
+  const run = data.playlist;
+  $('source').textContent = run ? `PLAYLIST · ${run.name.toLocaleUpperCase()} · ${run.position + 1} OF ${run.total}` :
+    state.offline ? 'FROM YOUR OFFLINE LIBRARY' : 'YOUR PERSONAL RADIO';
+  $('playlist-crumb').hidden = $('playlist-crumb-separator').hidden = !run;
+  if (run) {
+    $('playlist-crumb').textContent = '♪ ' + run.name;
+    $('playlist-crumb').title = `Playlist · song ${run.position + 1} of ${run.total}`;
+    $('playlist-crumb').dataset.id = run.id;
+  }
   $('title').textContent = state.title || 'Something good is next.';
   $('artist').textContent = state.artist || 'Connect to your station and make yourself at home.';
   $('album').textContent = state.album || '';
@@ -673,7 +681,7 @@ function render(data) {
     ? 'Reconnect to browse and manage your Pandora stations.'
     : (state.station ? `Listening to ${state.station}. Choose another station or shape your mix.` : 'Choose a station or discover something new.');
   $('current-track').textContent = state.title || 'Nothing playing';
-  document.title = `pianobar ${$('station').textContent} / ${$('current-track').textContent}`;
+  document.title = `pianobar ${$('station').textContent}${run ? ' / ' + run.name : ''} / ${$('current-track').textContent}`;
   $('mode-button').textContent = state.offline ? '↗ Reconnect' : '↓ Go offline';
   $('play-button').textContent = state.paused ? '▶' : 'Ⅱ';
   $('play-button').setAttribute('aria-label', state.paused ? 'Resume playback' : 'Pause playback');
@@ -1576,4 +1584,7 @@ async function createFromPicker() {
 $('playlist-picker-create').addEventListener('click', createFromPicker);
 $('playlist-picker-name').addEventListener('keydown', event => {
   if (event.key === 'Enter') { event.preventDefault(); createFromPicker(); }
+});
+$('playlist-crumb').addEventListener('click', () => {
+  if ($('playlist-crumb').dataset.id) selectPlaylist($('playlist-crumb').dataset.id);
 });

@@ -522,6 +522,13 @@ class DJTests(unittest.TestCase):
         time.sleep(.1)
         self.assertEqual(len(packets('queue_saved')), 1)
         self.assertEqual(self.session.playlists.run_public()['position'], 1)
+        # The DJ knows the song's place in the playlist.
+        self.session.dj.generate({}, context=dict(title='Song 0', artist='Artist 0', offline=True), cache=False)
+        sent = json.loads(self.calls[-1][1]['messages'][1]['content'])
+        self.assertEqual(sent['playlist'], dict(name='Late night', description='Quiet ones', songNumber=2, totalSongs=3))
+        self.assertIn('never a station', self.calls[-1][1]['messages'][0]['content'])
+        self.session.dj.generate({}, context=dict(title='Song 3', artist='Artist 3', offline=True), cache=False)
+        self.assertNotIn('playlist', json.loads(self.calls[-1][1]['messages'][1]['content']))
         # Anything else playing ends the run.
         self.session.state.update(savedId=ids[3], title='Song 3', artist='Artist 3', queuedSavedIds=[])
         self.session.playlists.on_state(dict(self.session.state))
