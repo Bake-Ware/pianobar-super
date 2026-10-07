@@ -224,6 +224,8 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
                 page.wait_for_function('() => audioSources.size > 0')
                 other.close()
                 wait_for(lambda s: not s['pending'])
+                assert not page.locator('#audio-output-panel').evaluate('details => details.open')
+                page.locator('#audio-output-panel summary').click()
                 page.locator('#audio-output').select_option('both')
                 wait_for(lambda s: s['state'].get('output') == 'both' and not s['pending'])
                 page.locator('#audio-output').select_option('host')

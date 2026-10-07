@@ -42,7 +42,7 @@ class Configuration:
     """Edit only supported keys; keep hand-written config and secrets private."""
     native_defaults = {'user': '', 'cache_songs': True, 'offline': False,
                        'offline_fallback': True, 'audio_quality': 'high', 'audio_buffer_ms': 200}
-    web_defaults = {'listen': '127.0.0.1', 'port': 8765, 'output': 'host'}
+    web_defaults = {'listen': '127.0.0.1', 'port': 8765, 'output': 'browser'}
     dj_defaults = dict(llm_url='', model='', style='A warm, playful radio DJ. Keep it natural, varied and brief.',
                        theme='A varied mix from my saved music', tts_url='', voice='', tts_ca='', metadata_network=True,
                        set_mode='songs', set_songs=1, set_minutes=15, play_over_music=True,

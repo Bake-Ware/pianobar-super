@@ -194,22 +194,29 @@ const labels = {
 };
 const stationActions = ['act_stationchange', 'act_stationcreate', 'act_stationaddmusic', 'act_stationaddbygenre', 'act_managestation', 'act_stationrename', 'act_addshared', 'act_stationcreatefromsong', 'act_stationselectquickmix', 'act_stationdelete'];
 const libraryActions = ['act_upcoming', 'act_history', 'act_songinfo', 'act_bookmark', 'act_songexplain', 'act_offline'];
-async function refreshLibrary() {
+// Background polls are silent and only re-render when the library changed;
+// the Refresh button shows activity only when it was pressed.
+let libraryText = '';
+async function refreshLibrary(manual = false) {
   if (libraryBusy) return;
   libraryBusy = true;
-  $('refresh-library').disabled = true;
+  if (manual) $('refresh-library').disabled = true;
   try {
     const response = await fetch('/api/library');
-    const result = await response.json();
+    const text = await response.text();
+    const result = JSON.parse(text);
     if (!response.ok) throw new Error(result.error || 'Could not read your saved songs.');
-    savedSongs = result.songs;
-    libraryRenderKey = '';
-    renderLibrary();
+    if (text !== libraryText || manual) {
+      libraryText = text;
+      savedSongs = result.songs;
+      libraryRenderKey = '';
+      renderLibrary();
+    }
   } catch (error) {
-    $('library-message').textContent = error.message;
+    if (manual || !savedSongs.length) $('library-message').textContent = error.message;
   } finally {
     libraryBusy = false;
-    $('refresh-library').disabled = false;
+    if (manual) $('refresh-library').disabled = false;
   }
 }
 // Library rows and groups are kept and reused between renders, so covers and
@@ -228,12 +235,12 @@ function libraryArtwork(song) {
     image.alt = '';
     image.loading = 'lazy';
     image.decoding = 'async';
-    image.hidden = true;
     image.src = song.cover;
     let attempts = 0;
-    image.addEventListener('load', () => { image.hidden = false; });
+    // A lazy image only loads once laid out, so it is faded in rather than hidden.
+    image.addEventListener('load', () => image.classList.add('loaded'));
     image.addEventListener('error', () => {
-      image.hidden = true;
+      image.classList.remove('loaded');
       if (attempts >= 3) return;
       const attempt = ++attempts;
       setTimeout(() => { if (image.isConnected) image.src = song.cover + '?retry=' + attempt; }, 1000 * 2 ** attempt);
@@ -412,11 +419,8 @@ document.querySelector('.library-tabs').addEventListener('keydown', event => {
   next.focus();
   next.click();
 });
-$('refresh-library').addEventListener('click', refreshLibrary);
+$('refresh-library').addEventListener('click', () => refreshLibrary(true));
 $('library-search').addEventListener('input', () => { libraryRenderKey = ''; renderLibrary(); });
-setInterval(() => {
-  if (document.body.dataset.view === 'library' && !document.hidden) refreshLibrary();
-}, 10000);
 
 function renderStations() {
   const state = snapshot.state;
@@ -662,7 +666,7 @@ function render(data) {
   $('play-button').setAttribute('aria-label', state.paused ? 'Resume playback' : 'Pause playback');
   $('volume').textContent = `${state.volume || 0} dB`;
   if (desiredOutput === state.output) desiredOutput = null;
-  $('audio-output').value = desiredOutput || state.output || 'host';
+  $('audio-output').value = desiredOutput || state.output || 'browser';
   if (data.exited || data.playerStopped || data.restarting || (!desiredOutput && state.output === 'host')) stopListening();
   if (state.paused) clearAudioQueue();
   $('elapsed').textContent = time(state.elapsed);
@@ -701,6 +705,12 @@ function clearAudioQueue() {
   audioSources.clear();
   audioNextTime = 0;
 }
+function showListening(on) {
+  const button = $('listen-button');
+  button.setAttribute('aria-pressed', String(on));
+  button.setAttribute('aria-label', on ? 'Stop listening' : 'Listen here');
+  button.title = on ? 'Stop listening in this browser' : 'Listen in this browser';
+}
 function stopListening() {
   ++audioGeneration;
   if (audioController) audioController.abort();
@@ -709,7 +719,7 @@ function stopListening() {
   // Keep the user-activated context alive so remote routing can resume playback.
   audioEpoch = null;
   browserStatus = 'idle';
-  $('listen-button').textContent = 'Listen here';
+  showListening(false);
   $('audio-status').textContent = '';
   if (browserId) browserRequest('heartbeat', {id: browserId, status: 'idle', ready: false}).catch(() => {});
 }
@@ -769,7 +779,7 @@ async function startListening() {
   await Promise.race([audioContext.resume(), new Promise(resolve => setTimeout(resolve, 500))]);
   if (audioContext.state !== 'running') {
     browserStatus = 'blocked';
-    $('audio-status').textContent = 'Audio requested · click Listen here to allow playback';
+    $('audio-status').textContent = 'Audio requested · tap the headphones to allow playback';
     return;
   }
   await registerBrowser();
@@ -777,7 +787,7 @@ async function startListening() {
   const controller = audioController = new AbortController();
   if (controller.signal.aborted) return;
   browserStatus = 'waiting';
-  $('listen-button').textContent = 'Stop listening';
+  showListening(true);
   $('audio-status').textContent = 'Waiting for audio…';
   (async () => {
     const response = await fetch('/api/audio', {signal: controller.signal,
@@ -1329,5 +1339,5 @@ async function watch() {
 }
 watch();
 setInterval(() => {
-  if (!snapshot.exited && document.body.dataset.view === 'library') refreshLibrary();
-}, 3000);
+  if (!snapshot.exited && document.body.dataset.view === 'library' && !document.hidden) refreshLibrary();
+}, 5000);

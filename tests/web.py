@@ -299,6 +299,11 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 assert page.evaluate("getComputedStyle(document.getElementById('song-links')).justifyContent") == 'flex-end'
                 links, controls = page.locator('#song-links').bounding_box(), page.locator('.player-controls').bounding_box()
                 assert page.locator('#metadata-source').bounding_box()['x'] + 40 > links['x'] + links['width'] - 40
+                # The links sit in the top-right corner, and the listen toggle sits beside Next.
+                assert links['y'] < controls['y'] + 70 and links['x'] + links['width'] > controls['x'] + controls['width'] - 80
+                assert page.locator('.transport-main #listen-button svg').count() == 1
+                assert page.locator('#listen-button').get_attribute('aria-label') == 'Listen here'
+                assert page.locator('#browser-name').is_hidden() and page.locator('#audio-output-panel summary').is_visible()
                 page.screenshot(path='/tmp/pianobar-dj-desktop.png')
                 page.set_viewport_size({'width': 390, 'height': 844})
                 assert page.evaluate('document.documentElement.scrollWidth <= window.innerWidth')
@@ -329,9 +334,13 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                     data = response.json()
                     for index, song in enumerate(data['songs']):
                         song['genres'] = ['jazz'] if index else ['ambient', 'jazz']
+                        song['cover'] = '/api/artwork/' + 'e' * 64
                     route.fulfill(response=response, body=json.dumps(data))
                 page.route('**/api/library', with_genres)
+                page.route('**/api/artwork/' + 'e' * 64, lambda route: route.fulfill(content_type='image/png', body=png))
                 page.evaluate('refreshLibrary()')
+                # A background refresh never flickers the button.
+                assert page.locator('#refresh-library').is_enabled()
                 page.wait_for_function("() => savedSongs.every(song => song.genres?.includes('jazz'))")
                 page.locator('#library-tab-genres').click()
                 assert page.locator('.library-group strong').all_text_contents() == ['ambient', 'jazz']
@@ -339,6 +348,8 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 assert page.locator('.library-group strong').all_text_contents() == ['ambient', 'jazz']
                 page.locator('#library-search').fill('')
                 page.locator('#library-tab-songs').click()
+                # Lazy covers load (they must not start hidden) and show once decoded.
+                page.wait_for_function("() => [...document.querySelectorAll('#saved-songs .saved-artwork img')].length === 2 && [...document.querySelectorAll('#saved-songs .saved-artwork img')].every(img => img.naturalWidth > 0 && img.classList.contains('loaded'))")
                 page.unroute('**/api/library')
                 # Stations: with one match, Enter plays it.
                 station_patch = dict(stations=[dict(id='s1', name='Jazz radio', quickMix=False), dict(id='s2', name='Punk radio', quickMix=False)], offline=False)

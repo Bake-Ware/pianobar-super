@@ -16,7 +16,7 @@
     <p class="eyebrow sidebar-label">YOUR LISTENING ROOM</p>
     <nav class="primary-nav" aria-label="Main navigation">
     <a class="nav active" href="#player" data-view="player" aria-current="page"><span id="nav-player-icon" aria-hidden="true">◉</span><img id="nav-cover" alt="" hidden> Now playing</a>
-    <a class="nav" href="#stations" data-view="stations"><span>≋</span> Stations</a>
+    <a class="nav" href="#stations" data-view="stations"><span aria-hidden="true"><svg class="nav-icon" viewBox="0 0 24 24" focusable="false"><path d="M7 7.5 17.5 3"/><rect x="2.5" y="7.5" width="19" height="13" rx="2"/><circle cx="15.5" cy="14" r="3"/><path d="M6 11.5h4M6 14.5h4M6 17.5h4"/></svg></span> Stations</a>
     <a class="nav" href="#library" data-view="library"><span>▤</span> Library</a>
     <a class="nav" href="#settings" data-view="settings"><span>⚙</span> Settings</a>
     </nav>
@@ -24,6 +24,7 @@
     <div id="sidebar-tools" class="sidebar-controls" data-views="player stations library">
       <details id="station-controls" class="sidebar-group"><summary>Find your next favorite</summary><p>Shape the station. Follow your curiosity.</p><div id="station-actions" class="action-grid"></div></details>
       <details id="library-controls" data-views="player stations" class="sidebar-group"><summary>Make it yours</summary><p>Keep the good ones close, even offline.</p><div id="library-actions" class="action-grid"></div></details>
+      <details id="shortcut-legend" class="sidebar-group"><summary id="shortcuts-title">Keyboard shortcuts</summary><p>Use your pianobar keys anywhere outside text fields. Faded ones are unavailable right now.</p><div id="shortcut-list" class="shortcut-list"></div></details>
       <details id="more-controls" class="sidebar-group"><summary>More controls</summary><p>Every other pianobar command.</p><div id="more-actions" class="action-grid"></div></details>
     </div>
     <div class="sidebar-bottom"><span class="little-record"></span><p>A little radio.<br>A lot of possibility.</p><small>Made for listening.</small></div>
@@ -36,11 +37,14 @@
       <div class="artwork" id="artwork"><div class="record"><div class="record-label"><span>p</span><small>PIANOBAR RADIO</small></div></div><img id="cover" alt="Album artwork" hidden><span class="art-label">THE EVERYDAY SOUNDTRACK</span></div>
       <div class="player-content">
         <aside id="activity" data-views="player" class="activity-backdrop" aria-label="Player activity"><pre id="transcript" aria-label="Player output"></pre></aside>
-        <div class="player-controls"><div class="on-air"><span></span><span id="source">YOUR PERSONAL RADIO</span></div><h2 id="title">Something good is next.</h2><p id="artist" class="artist">Connect to your station and make yourself at home.</p><p id="album" class="album"></p>
+        <div class="player-controls"><div class="on-air"><span></span><span id="source">YOUR PERSONAL RADIO</span><div id="song-links" class="song-links" hidden>
+          <a id="youtube-search" target="_blank" rel="noopener noreferrer" title="Find on YouTube" aria-label="Find this song on YouTube"><svg viewBox="0 0 28 20" aria-hidden="true" focusable="false"><rect width="28" height="20" rx="5" fill="#ff0033"/><path d="M11 5.5v9l8-4.5z" fill="#fff"/></svg></a>
+          <a id="metadata-source" target="_blank" rel="noopener noreferrer" title="MusicBrainz" aria-label="Open this recording on MusicBrainz" hidden><svg viewBox="0 0 25 28" aria-hidden="true" focusable="false"><polygon points="12 0 0 7 0 21 12 28" fill="#ba478f"/><polygon points="13 0 25 7 25 21 13 28" fill="#eb743b"/></svg></a>
+        </div></div><h2 id="title">Something good is next.</h2><p id="artist" class="artist">Connect to your station and make yourself at home.</p><p id="album" class="album"></p>
         <p id="song-metadata" class="song-metadata" hidden></p>
 
         <div class="progress-wrap"><progress id="progress" max="1" value="0" aria-label="Song progress"></progress><div class="times"><span id="elapsed">0:00</span><span id="duration">0:00</span></div></div>
-        <div class="transport"><div class="transport-main"><button class="icon-button" data-action="act_songlove" aria-label="Love song" title="Love song" disabled>♡</button><button id="play-button" class="play-button" data-action="act_songpausetoggle" aria-label="Pause playback" disabled>Ⅱ</button><button class="icon-button skip" data-action="act_songnext" aria-label="Next song" title="Next song" disabled><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16l11-8zM18 4h3v16h-3z"/></svg></button></div><div class="volume"><button data-action="act_voldown" aria-label="Decrease volume" disabled>−</button><span id="volume">0 dB</span><button data-action="act_volup" aria-label="Increase volume" disabled>+</button></div></div>
+        <div class="transport"><div class="transport-main"><button class="icon-button" data-action="act_songlove" aria-label="Love song" title="Love song" disabled>♡</button><button id="play-button" class="play-button" data-action="act_songpausetoggle" aria-label="Pause playback" disabled>Ⅱ</button><button class="icon-button skip" data-action="act_songnext" aria-label="Next song" title="Next song" disabled><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16l11-8zM18 4h3v16h-3z"/></svg></button><button id="listen-button" class="icon-button listen-button" type="button" aria-pressed="false" aria-label="Listen here" title="Listen here"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="5" height="7" rx="1.5"/><rect x="16" y="14" width="5" height="7" rx="1.5"/></svg></button></div><div class="volume"><button data-action="act_voldown" aria-label="Decrease volume" disabled>−</button><span id="volume">0 dB</span><button data-action="act_volup" aria-label="Increase volume" disabled>+</button></div></div>
         <div class="track-actions"><button data-action="act_songban" disabled>⊘ Ban track</button><button data-action="act_songtired" disabled>◷ Take a break</button><button data-action="act_bookmark" disabled>＋ Bookmark</button></div>
         <section id="dj-booth" class="dj-booth" data-state="off" aria-labelledby="dj-name" hidden>
           <div class="dj-top"><span class="dj-light" aria-hidden="true"></span><h3 id="dj-name">Your DJ</h3><p id="dj-state" class="dj-state" role="status">Off</p></div>
@@ -57,18 +61,9 @@
             <form id="dj-theme-form" class="dj-form"><label for="dj-theme">Station theme</label><div class="dj-field"><input id="dj-theme" maxlength="450" placeholder="A varied mix from my saved music" autocomplete="off"><button class="dj-button" type="submit">Set</button></div></form>
           </details>
         </section>
-        <div id="song-links" class="song-links" hidden>
-          <a id="youtube-search" target="_blank" rel="noopener noreferrer" title="Find on YouTube" aria-label="Find this song on YouTube"><svg viewBox="0 0 28 20" aria-hidden="true" focusable="false"><rect width="28" height="20" rx="5" fill="#ff0033"/><path d="M11 5.5v9l8-4.5z" fill="#fff"/></svg></a>
-          <a id="metadata-source" target="_blank" rel="noopener noreferrer" title="MusicBrainz" aria-label="Open this recording on MusicBrainz" hidden><svg viewBox="0 0 25 28" aria-hidden="true" focusable="false"><polygon points="12 0 0 7 0 21 12 28" fill="#ba478f"/><polygon points="13 0 25 7 25 21 13 28" fill="#eb743b"/></svg></a>
-        </div>
-        <div class="audio-output"><label for="audio-output">Audio output</label><select id="audio-output"><option value="host">Host</option><option value="browser">Browser</option><option value="both">Both</option></select><button id="listen-button" type="button">Listen here</button><label for="browser-name">This browser</label><input id="browser-name" maxlength="80" placeholder="Name this browser" aria-label="This browser name"><span id="audio-status" role="status"></span></div>
+        <details id="audio-output-panel" class="audio-output"><summary>Audio output <span id="audio-status" role="status"></span></summary><div class="audio-output-body"><label for="audio-output">Play on</label><select id="audio-output"><option value="browser">Browser</option><option value="host">Host speakers</option><option value="both">Both</option></select><label for="browser-name">This browser</label><input id="browser-name" maxlength="80" placeholder="Name this browser" aria-label="This browser name"></div></details>
         </div>
       </div>
-    </section>
-    <section id="shortcut-legend" data-views="player" class="shortcut-legend" aria-labelledby="shortcuts-title">
-      <details><summary id="shortcuts-title">Keyboard shortcuts <span>+</span></summary>
-      <p>Use your pianobar keys anywhere outside text fields and dialogs. Faded shortcuts are unavailable right now.</p>
-      <div id="shortcut-list" class="shortcut-list"></div></details>
     </section>
     <section id="stations-page" data-views="stations" class="control-card" aria-labelledby="stations-title">
       <div class="section-heading"><h1 id="stations-title">Stations</h1></div>
