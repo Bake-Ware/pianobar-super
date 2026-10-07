@@ -89,6 +89,11 @@ for the **Saving … songs for offline** message to clear before shutting down.
 Only completed saves appear in Library; identical song/quality entries are
 deduplicated. Saving uses an additional download request, so it consumes extra bandwidth.
 
+Library groups your saved music under **Songs**, **Artists**, **Albums** and
+**Genres** tabs. Open a group to see its songs, or press its **Play** button to
+play the group in order (up to 31 songs). Genres come from MusicBrainz lookups,
+which happen as songs play; songs not looked up yet appear under **No genre yet**.
+
 Choose **Go offline** to play saved songs. Network failures can also trigger offline
 fallback when saved music is available. **Reconnect** returns to Pandora.
 Library's **Download** button exports AAC as M4A or MP3 as MP3, with metadata and
@@ -120,10 +125,13 @@ appears once an LLM or a voice is configured, and each switch only appears
 when what it needs is set up. (The remaining pianobar commands moved to
 **More controls** in the sidebar.)
 
-- **Talks**: the DJ introduces each new song once it has settled (about three
-  seconds in), and reads any line you type into **Give the DJ a line**.
-  **Introduce this song** asks for an introduction on demand; **Stop** cuts the
-  current line.
+- **Talks**: the DJ introduces each new song. While a song plays, it writes
+  and voices the next song's introduction (often with a quick segue from the
+  one ending), so it goes on air the moment that song starts. When the next
+  song isn't known in advance (a fresh Pandora playlist or a station hop), the
+  intro is written live a few seconds in. **Stop** cuts the current line. In
+  Settings → DJ, **Try your DJ** speaks a line you type or introduces the
+  current song on demand.
 - **Hops stations**: every few songs (Settings → **Songs per station when
   hopping**, default 4), the DJ queues a random Pandora station. The current
   song finishes first, every station is visited before any repeats, and

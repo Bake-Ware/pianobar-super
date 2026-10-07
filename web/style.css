@@ -1633,3 +1633,57 @@ body[data-pinned="true"] #widget-pin {
 .dj-try-row button { padding: 12px 18px; border: 1px solid var(--line); background: var(--selected); color: var(--ink); }
 #dj-say { border-color: var(--orange); background: var(--orange); color: #172b2b; }
 @media (max-width: 560px) { .dj-try-row input { font-size: 16px; } .dj-try-row button { flex: 1; min-height: 44px; } }
+
+/* Library: group tabs and expandable groups. */
+.library-tabs { display: flex; gap: 4px; margin: 22px 0 0; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.library-tabs [role="tab"], .settings-tabs [role="tab"] { flex-shrink: 0; padding: 11px 16px; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; background: transparent; color: var(--muted); font-size: 13px; }
+.library-tabs [role="tab"]:hover, .settings-tabs [role="tab"]:hover { color: var(--ink); }
+.library-tabs [role="tab"][aria-selected="true"], .settings-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--orange); color: var(--ink); font-weight: 600; }
+.library-group { border-bottom: 1px solid var(--line); }
+.library-group > summary { display: flex; align-items: center; gap: 14px; padding: 14px 0; font-size: 14px; }
+.library-group > summary::after { content: "+"; order: -1; width: 12px; color: var(--muted); }
+.library-group[open] > summary::after { content: "−"; }
+.library-group-info { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 4px; }
+.library-group-info strong { font-weight: 500; overflow-wrap: anywhere; }
+.library-group-info small { font-size: 11px; color: var(--muted); }
+.library-group.current .library-group-info strong { color: var(--orange); }
+.library-group-songs { padding: 0 0 8px 26px; }
+.library-group-songs .saved-song { padding: 12px 0; }
+@media (max-width: 560px) { .library-group-songs { padding-left: 0; } .library-group > summary .saved-play { min-height: 44px; } }
+
+/* Settings: tabs over one form, card sections, a sticky save bar. */
+.settings-tabs { display: flex; gap: 4px; margin: 26px 0 0; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.settings-tabs::-webkit-scrollbar, .library-tabs::-webkit-scrollbar { display: none; }
+.settings-panel[hidden] { display: none; }
+.settings-lead { margin: 22px 0 6px; max-width: 680px; font-size: 14px; line-height: 1.65; color: var(--muted); }
+#settings-form fieldset { margin: 18px 0 0; padding: 22px 24px 24px; border: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 80%, var(--paper)); }
+#settings-form legend { float: left; width: 100%; margin: 0 0 18px; padding: 0; font-size: 15px; font-weight: 600; letter-spacing: -.2px; }
+#settings-form legend + * { clear: both; }
+#settings-form fieldset > :last-child { margin-bottom: 0; }
+.settings-grid label { gap: 8px; color: var(--ink); }
+.settings-grid label small { font-size: 11px; line-height: 1.5; color: var(--muted); }
+.settings-grid label[hidden] { display: none; }
+.settings-wide { grid-column: 1 / -1; }
+.settings-inline { align-self: end; gap: 10px; }
+.settings-inline button { padding: 12px 14px; }
+.settings-checks { margin-top: 18px; }
+.settings-grid + .settings-hint, .settings-checks + .settings-hint { margin-top: 14px; }
+.settings-hint { margin: 8px 0 0; }
+.settings-tag { display: inline-block; margin: 18px 0 0; padding: 4px 9px; border: 1px solid var(--line); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.settings-panel > .settings-tag { margin-top: 18px; }
+.settings-subhead { margin: 0 0 4px; font-size: 13px; font-weight: 600; }
+.dj-try { margin: 22px 0 0; padding-top: 20px; border-top: 1px solid var(--line); }
+.dj-try .settings-hint { margin: 0 0 12px; }
+.android-download { margin-top: 14px; }
+.settings-actions { position: sticky; z-index: 3; bottom: 50px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 24px; margin: 26px 0 0; padding: 16px 0; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--panel) 70%, var(--paper)); }
+.settings-actions #settings-status { flex: 1 1 280px; margin: 0; }
+.settings-actions .settings-buttons { flex-shrink: 0; }
+@media (max-width: 850px) {
+    .settings-actions { bottom: calc(92px + env(safe-area-inset-bottom)); }
+    #settings-form fieldset { padding: 18px 16px 20px; }
+    .settings-tabs [role="tab"], .library-tabs [role="tab"] { min-height: 44px; padding: 10px 13px; }
+}
+@media (max-width: 560px) {
+    .settings-actions .settings-buttons { width: 100%; }
+    .settings-actions .settings-buttons button { flex: 1; min-height: 44px; }
+}

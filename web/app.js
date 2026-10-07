@@ -212,81 +212,206 @@ async function refreshLibrary() {
     $('refresh-library').disabled = false;
   }
 }
-function renderLibrary() {
-  const query = $('library-search').value.trim().toLocaleLowerCase();
-  const currentId = snapshot.state.savedId || '';
-  const key = JSON.stringify([savedSongs, query, currentId]);
-  if (key === libraryRenderKey) return;
-  libraryRenderKey = key;
-  const filtered = savedSongs.filter(song =>
-    [song.title, song.artist, song.album].some(value => value.toLocaleLowerCase().includes(query)));
-  $('saved-count').textContent = savedSongs.length;
-  $('library-message').textContent = !savedSongs.length ?
-    'No saved songs yet. Songs appear here when their background downloads finish.' :
-    (!filtered.length ? 'No songs match your search.' :
-      `${filtered.length} ${filtered.length === 1 ? 'song' : 'songs'} · Choose Play to listen locally.`);
-  const rows = filtered.map(song => {
-    const row = document.createElement('div');
-    row.className = 'saved-song' + (song.id === currentId ? ' current' : '');
-    const info = document.createElement('div');
-    info.className = 'saved-song-info';
-    const title = document.createElement('p');
-    title.className = 'saved-song-title';
-    title.textContent = song.title || 'Untitled song';
-    const detail = document.createElement('p');
-    detail.className = 'saved-song-detail';
-    detail.textContent = [song.artist || 'Unknown artist', song.album,
-      song.id === currentId ? 'Now playing' : ''].filter(Boolean).join(' · ');
-    info.append(title, detail);
-    const duration = document.createElement('span');
-    duration.className = 'saved-song-duration';
-    duration.textContent = time(song.duration);
+// Library rows and groups are kept and reused between renders, so covers and
+// open groups stay put while the server reports new saves.
+let libraryGroup = 'songs', libraryQueue = null;
+try { libraryGroup = localStorage.getItem('pianobarLibraryGroup') || 'songs'; } catch (_) {}
+const libraryRows = new Map(), libraryGroups = new Map();
+const songLabel = song => song.title || 'Untitled song';
+function libraryArtwork(song) {
+  const artwork = document.createElement('span');
+  artwork.className = 'saved-artwork';
+  artwork.setAttribute('aria-hidden', 'true');
+  artwork.textContent = '♫';
+  if (/^\/api\/artwork\/[0-9a-f]{64}$/.test(song.cover || '')) {
+    const image = document.createElement('img');
+    image.alt = '';
+    image.loading = 'lazy';
+    image.decoding = 'async';
+    image.hidden = true;
+    image.src = song.cover;
+    let attempts = 0;
+    image.addEventListener('load', () => { image.hidden = false; });
+    image.addEventListener('error', () => {
+      image.hidden = true;
+      if (attempts >= 3) return;
+      const attempt = ++attempts;
+      setTimeout(() => { if (image.isConnected) image.src = song.cover + '?retry=' + attempt; }, 1000 * 2 ** attempt);
+    });
+    artwork.append(image);
+  }
+  return artwork;
+}
+function libraryRow(song, scope) {
+  const key = scope + '\u0000' + song.id;
+  const signature = JSON.stringify([song.title, song.artist, song.album, song.duration, song.cover]);
+  const cached = libraryRows.get(key);
+  if (cached && cached.signature === signature) return cached.row;
+  const row = document.createElement('div');
+  row.className = 'saved-song';
+  row.dataset.songId = song.id;
+  const info = document.createElement('div');
+  info.className = 'saved-song-info';
+  const title = document.createElement('p');
+  title.className = 'saved-song-title';
+  title.textContent = songLabel(song);
+  const detail = document.createElement('p');
+  detail.className = 'saved-song-detail';
+  info.append(title, detail);
+  const duration = document.createElement('span');
+  duration.className = 'saved-song-duration';
+  duration.textContent = time(song.duration);
+  const play = document.createElement('button');
+  play.type = 'button';
+  play.className = 'saved-play';
+  play.textContent = '▶ Play';
+  play.setAttribute('aria-label', 'Play ' + songLabel(song));
+  play.addEventListener('click', () => command({playSaved: song.id}));
+  const download = document.createElement('a');
+  download.className = 'saved-download';
+  download.textContent = '↓ Download';
+  download.href = '/api/download/' + encodeURIComponent(song.id);
+  download.setAttribute('download', '');
+  download.setAttribute('aria-label', 'Download ' + songLabel(song));
+  const actions = document.createElement('div');
+  actions.className = 'saved-song-actions';
+  actions.append(play, download);
+  row.append(libraryArtwork(song), info, duration, actions);
+  libraryRows.set(key, {signature, row, detail, song});
+  return row;
+}
+function libraryGroupsFor(songs) {
+  const groups = new Map();
+  const add = (key, name, detail, song) => {
+    if (!groups.has(key)) groups.set(key, {key, name, detail, songs: []});
+    groups.get(key).songs.push(song);
+  };
+  for (const song of songs) {
+    if (libraryGroup === 'artists') add(song.artist || '', song.artist || 'Unknown artist', '', song);
+    else if (libraryGroup === 'albums') add((song.album || '') + '\u0000' + (song.artist || ''), song.album || 'Unknown album', song.artist || 'Unknown artist', song);
+    else if (song.genres?.length) song.genres.forEach(genre => add(genre.toLocaleLowerCase(), genre, '', song));
+    else add('\u0000none', 'No genre yet', 'Genres come from MusicBrainz after a song plays', song);
+  }
+  return [...groups.values()].sort((a, b) => (a.key.startsWith('\u0000') - b.key.startsWith('\u0000')) ||
+    a.name.localeCompare(b.name, undefined, {sensitivity: 'base'}));
+}
+function libraryGroupElement(group) {
+  const key = libraryGroup + '\u0000' + group.key;
+  let cached = libraryGroups.get(key);
+  if (!cached) {
+    const details = document.createElement('details');
+    details.className = 'library-group';
+    const summary = document.createElement('summary');
+    const artwork = document.createElement('span');
+    const info = document.createElement('span');
+    info.className = 'library-group-info';
+    const name = document.createElement('strong');
+    const detail = document.createElement('small');
+    info.append(name, detail);
     const play = document.createElement('button');
     play.type = 'button';
     play.className = 'saved-play';
     play.textContent = '▶ Play';
-    play.setAttribute('aria-label', 'Play ' + (song.title || 'Untitled song'));
-    play.addEventListener('click', () => command({playSaved: song.id}));
-    const download = document.createElement('a');
-    download.className = 'saved-download';
-    download.textContent = '↓ Download';
-    download.href = '/api/download/' + encodeURIComponent(song.id);
-    download.setAttribute('download', '');
-    download.setAttribute('aria-label', 'Download ' + (song.title || 'Untitled song'));
-    const actions = document.createElement('div');
-    actions.className = 'saved-song-actions';
-    actions.append(play, download);
-    const artwork = document.createElement('span');
-    artwork.className = 'saved-artwork';
-    artwork.setAttribute('aria-hidden', 'true');
-    artwork.textContent = '♫';
-    if (/^\/api\/artwork\/[0-9a-f]{64}$/.test(song.cover || '')) {
-      const image = document.createElement('img');
-      image.alt = '';
-      image.loading = 'lazy';
-      image.decoding = 'async';
-      image.src = song.cover;
-      let attempts = 0;
-      image.addEventListener('load', () => { image.hidden = false; });
-      image.addEventListener('error', () => {
-        image.hidden = true;
-        if (attempts >= 3) return;
-        const attempt = ++attempts;
-        setTimeout(() => {
-          if (image.isConnected) {
-            image.hidden = false;
-            image.src = song.cover + '?retry=' + attempt;
-          }
-        }, 1000 * 2 ** attempt);
-      });
-      artwork.append(image);
-    }
-    row.append(artwork, info, duration, actions);
-    return row;
-  });
-  $('saved-songs').replaceChildren(...rows);
+    play.addEventListener('click', event => {
+      event.preventDefault();
+      playSongs(cached.songs.map(song => song.id));
+    });
+    summary.append(artwork, info, play);
+    const list = document.createElement('div');
+    list.className = 'library-group-songs';
+    details.append(summary, list);
+    cached = {details, summary, artwork, name, detail, play, list, songs: [], art: ''};
+    libraryGroups.set(key, cached);
+  }
+  cached.songs = group.songs;
+  cached.name.textContent = group.name;
+  const seconds = group.songs.reduce((total, song) => total + (song.duration || 0), 0);
+  cached.detail.textContent = [group.detail, `${group.songs.length} ${group.songs.length === 1 ? 'song' : 'songs'}`, seconds ? time(seconds) : '']
+    .filter(Boolean).join(' · ');
+  cached.play.setAttribute('aria-label', 'Play ' + group.name);
+  const cover = group.songs.find(song => /^\/api\/artwork\/[0-9a-f]{64}$/.test(song.cover || ''));
+  if (cached.art !== (cover?.cover || '')) {
+    cached.art = cover?.cover || '';
+    cached.artwork.replaceWith(cached.artwork = libraryArtwork(cover || {}));
+  }
+  // Songs render only while a group is open; long libraries stay light.
+  if (cached.details.open) {
+    const songs = [...group.songs].sort((a, b) => libraryGroup === 'albums' ? 0 : songLabel(a).localeCompare(songLabel(b)));
+    const rows = songs.map(song => libraryRow(song, key));
+    if (rows.length !== cached.list.children.length || rows.some((row, index) => cached.list.children[index] !== row)) cached.list.replaceChildren(...rows);
+  }
+  if (!cached.toggleBound) {
+    cached.toggleBound = true;
+    cached.details.addEventListener('toggle', () => { libraryRenderKey = ''; renderLibrary(); });
+  }
+  return cached.details;
+}
+async function playSongs(ids) {
+  if (!ids.length || !await command({playSaved: ids[0]})) return;
+  // Queue the rest once the first song is playing (the player holds up to 30).
+  libraryQueue = ids.length > 1 ? {first: ids[0], rest: ids.slice(1, 31)} : null;
+}
+function continueLibraryQueue() {
+  const state = snapshot.state;
+  if (!libraryQueue || state.savedId !== libraryQueue.first || snapshot.pending || sending) return;
+  const queue = libraryQueue;
+  libraryQueue = null;
+  command({queueSaved: queue.rest, expectedSongKey: state.songKey});
+}
+function renderLibrary() {
+  continueLibraryQueue();
+  const query = $('library-search').value.trim().toLocaleLowerCase();
+  const currentId = snapshot.state.savedId || '';
+  const key = JSON.stringify([savedSongs, query, currentId, libraryGroup]);
+  if (key === libraryRenderKey) return;
+  libraryRenderKey = key;
+  document.querySelectorAll('.library-tabs [role="tab"]').forEach(tab =>
+    tab.setAttribute('aria-selected', String(tab.dataset.group === libraryGroup)));
+  $('saved-songs').setAttribute('aria-labelledby', 'library-tab-' + libraryGroup);
+  const filtered = savedSongs.filter(song =>
+    [song.title, song.artist, song.album, ...(song.genres || [])].some(value => (value || '').toLocaleLowerCase().includes(query)));
+  $('saved-count').textContent = savedSongs.length;
+  const present = new Set(savedSongs.map(song => song.id));
+  for (const [rowKey, cached] of libraryRows) if (!present.has(cached.song.id)) libraryRows.delete(rowKey);
+  let children;
+  if (libraryGroup === 'songs') {
+    children = filtered.map(song => libraryRow(song, 'songs'));
+    $('library-message').textContent = !savedSongs.length ?
+      'No saved songs yet. Songs appear here when their background downloads finish.' :
+      (!filtered.length ? 'No songs match your search.' : `${filtered.length} ${filtered.length === 1 ? 'song' : 'songs'} · Choose Play to listen locally.`);
+  } else {
+    const groups = libraryGroupsFor(filtered);
+    children = groups.map(libraryGroupElement);
+    const noun = {artists: ['artist', 'artists'], albums: ['album', 'albums'], genres: ['genre', 'genres']}[libraryGroup];
+    $('library-message').textContent = !savedSongs.length ?
+      'No saved songs yet. Songs appear here when their background downloads finish.' :
+      (!groups.length ? 'Nothing matches your search.' : `${groups.length} ${noun[groups.length === 1 ? 0 : 1]} · Open one to see its songs, or play them all.`);
+  }
+  if (children.length !== $('saved-songs').children.length || children.some((child, index) => $('saved-songs').children[index] !== child)) {
+    $('saved-songs').replaceChildren(...children);
+  }
+  // Only the parts that change on every song are updated in place.
+  for (const {row, detail, song} of libraryRows.values()) {
+    const current = song.id === currentId;
+    row.classList.toggle('current', current);
+    detail.textContent = [song.artist || 'Unknown artist', song.album, current ? 'Now playing' : ''].filter(Boolean).join(' · ');
+  }
+  for (const cached of libraryGroups.values()) cached.details.classList.toggle('current', cached.songs.some(song => song.id === currentId));
   updateDisabled();
 }
+document.querySelectorAll('.library-tabs [role="tab"]').forEach(tab => tab.addEventListener('click', () => {
+  libraryGroup = tab.dataset.group;
+  try { localStorage.setItem('pianobarLibraryGroup', libraryGroup); } catch (_) {}
+  libraryRenderKey = '';
+  renderLibrary();
+}));
+document.querySelector('.library-tabs').addEventListener('keydown', event => {
+  if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+  const tabs = [...document.querySelectorAll('.library-tabs [role="tab"]')];
+  const next = tabs[(tabs.indexOf(document.activeElement) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+  next.focus();
+  next.click();
+});
 $('refresh-library').addEventListener('click', refreshLibrary);
 $('library-search').addEventListener('input', () => { libraryRenderKey = ''; renderLibrary(); });
 setInterval(() => {
@@ -330,6 +455,13 @@ function renderStations() {
   }));
 }
 $('station-search').addEventListener('input', () => { renderStations(); updateDisabled(); });
+$('station-search').addEventListener('keydown', event => {
+  // With a single match, Enter plays it.
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  const buttons = [...document.querySelectorAll('#station-list .station-play')];
+  if (buttons.length === 1 && !buttons[0].disabled && buttons[0].dataset.selected !== 'true') buttons[0].click();
+});
 
 function notify(message) {
   $('notice').textContent = message;
@@ -501,6 +633,7 @@ function render(data) {
   $('setup-message').hidden = !data.setupRequired;
   if (data.setupRequired && !setupShown) {
     setupShown = true;
+    showSettingsTab('pandora');
     history.replaceState(null, '', '#settings');
     showView('settings');
   }
@@ -1025,7 +1158,7 @@ $('sample-dj-voice').addEventListener('click', async () => {
     if (voiceSampleController !== controller) return;
     voiceSampleURL = URL.createObjectURL(blob);
     const audio = voiceSampleAudio = new Audio(voiceSampleURL);
-    audio.onended = () => { if (voiceSampleAudio === audio) { stopVoiceSample(); $('voice-sample-status').textContent = 'Sample finished. Save settings to use this voice immediately.'; } };
+    audio.onended = () => { if (voiceSampleAudio === audio) { stopVoiceSample(); $('voice-sample-status').textContent = 'Sample finished. Save to use this voice right away.'; } };
     audio.onerror = () => { if (voiceSampleAudio === audio) { stopVoiceSample(); $('voice-sample-status').textContent = 'Could not play the voice sample.'; } };
     await audio.play();
     if (voiceSampleAudio === audio) $('voice-sample-status').textContent = `Playing ${voice || 'the server default voice'}.`;
@@ -1036,6 +1169,41 @@ $('sample-dj-voice').addEventListener('click', async () => {
 $('setting-dj-voice').addEventListener('change', () => { stopVoiceSample(); $('voice-sample-status').textContent = 'Preview this voice, or save settings to apply it immediately.'; });
 window.addEventListener('pagehide', stopVoiceSample);
 
+// Settings are one form split into tabs; switching tabs never loses edits.
+let settingsTab = 'listening';
+try { settingsTab = localStorage.getItem('pianobarSettingsTab') || 'listening'; } catch (_) {}
+function showSettingsTab(tab, focus = false) {
+  if (!$('settings-panel-' + tab)) tab = 'listening';
+  settingsTab = tab;
+  try { localStorage.setItem('pianobarSettingsTab', tab); } catch (_) {}
+  document.querySelectorAll('.settings-tabs [role="tab"]').forEach(button => {
+    const selected = button.dataset.tab === tab;
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+    if (selected && focus) button.focus();
+  });
+  document.querySelectorAll('.settings-panel').forEach(panel => { panel.hidden = panel.id !== 'settings-panel-' + tab; });
+}
+document.querySelectorAll('.settings-tabs [role="tab"]').forEach(button =>
+  button.addEventListener('click', () => showSettingsTab(button.dataset.tab)));
+document.querySelector('.settings-tabs').addEventListener('keydown', event => {
+  if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+  const tabs = [...document.querySelectorAll('.settings-tabs [role="tab"]')];
+  const index = tabs.findIndex(button => button.dataset.tab === settingsTab);
+  showSettingsTab(tabs[(index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length].dataset.tab, true);
+});
+// An invalid field on a hidden tab would block saving silently; reveal it.
+$('settings-form').addEventListener('invalid', event => {
+  const panel = event.target.closest('.settings-panel');
+  if (panel?.hidden) showSettingsTab(panel.id.replace('settings-panel-', ''));
+}, true);
+function renderSetSize() {
+  const minutes = $('setting-dj-set_mode').value === 'minutes';
+  $('set-songs-field').hidden = minutes;
+  $('set-minutes-field').hidden = !minutes;
+}
+$('setting-dj-set_mode').addEventListener('change', renderSetSize);
+showSettingsTab(settingsTab);
 const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'dj_name', 'listener_name', 'hop_songs'];
 const settingsKeys = ['user', 'cache_dir', 'cache_songs', 'offline', 'offline_fallback', 'audio_quality', 'audio_buffer_ms'];
 async function loadSettings(force = false) {
@@ -1060,6 +1228,7 @@ async function loadSettings(force = false) {
       else input.value = data.dj[key] || '';
       input.disabled = data.dj.overrides.includes(key);
     }
+    renderSetSize();
     for (const key of ['llm_key', 'tts_key']) {
       $('setting-dj-' + key).value = '';
       $('setting-dj-' + key).disabled = data.dj.overrides.includes(key);

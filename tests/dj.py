@@ -535,6 +535,41 @@ class DJTests(unittest.TestCase):
         self.assertEqual((page['underruns'], page['resyncs']), (3, 1))
         self.request('/api/clients/heartbeat', {'id': client, 'status': 'playing', 'ready': True, 'underruns': -1}, expected=400)
 
+    def test_next_intro_is_written_and_voiced_before_its_song_starts(self):
+        import time
+        dj = self.session.dj
+        dj.talk = True
+        self.session.state.update(elapsed=0, nextTitle='London Calling', nextArtist='The Clash', nextAlbum='London Calling')
+        # Nothing is prepared until this song's own intro has gone out.
+        dj.on_state(self.session.state)
+        time.sleep(.1)
+        self.assertEqual(self.calls, [])
+        dj.auto_song, dj.auto_done = dj.song_key(self.session.state), True
+        dj.on_state(self.session.state)
+        upcoming = dict(title='London Calling', artist='The Clash', album='London Calling')
+        key = dj.song_key(upcoming)
+        deadline = time.monotonic() + 3
+        while key not in dj.prepared or dj.prep_busy:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.01)
+        chats = [body for path, body, _ in self.calls if path == '/chat']
+        self.assertEqual(len(chats), 1)
+        context = json.loads(chats[0]['messages'][1]['content'])
+        self.assertEqual((context['title'], context['previous']['title']), ('London Calling', 'Dat New New'))
+        self.assertIn('segue', chats[0]['messages'][0]['content'])
+        # The voice is rendered ahead too, not just the words.
+        self.assertEqual(sum(path == '/speech' for path, _, _ in self.calls), 1)
+        # Repeated state updates don't prepare it again.
+        for _ in range(3):
+            dj.on_state(self.session.state)
+        self.assertEqual(sum(path == '/chat' for path, _, _ in self.calls), 1)
+        # The moment the song starts, its intro goes on air with no new LLM call.
+        self.session.state.update(upcoming, elapsed=0, nextTitle='', nextArtist='', nextAlbum='')
+        dj.on_state(self.session.state)
+        self.assertEqual(self.spoken, [dict(text='Coming at ya with Kid Cudi and Dat New New.', songKey=key)])
+        self.assertEqual(sum(path == '/chat' for path, _, _ in self.calls), 1)
+        self.assertNotIn(key, dj.prepared)
+
     def test_station_intros_stay_silent_unless_the_dj_talks(self):
         from unittest.mock import Mock
         first, second = 'a' * 64 + '.mka', 'b' * 64 + '.mka'

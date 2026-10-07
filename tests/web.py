@@ -187,6 +187,18 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 page.route('**' + recovered_art, lambda route: route.fulfill(content_type='image/png', body=png))
                 youtube_requests = []
                 page.on('request', lambda req: youtube_requests.append(req.url) if 'youtube.com' in req.url else None)
+                # Later server snapshots carry the same test state, so a poll can't undo it.
+                art_patch = dict(cachedCover=broken_art, cover='https://art.example.test/missing.jpg', offline=False,
+                                 metadata=dict(cover=recovered_art, genres=['hip hop'], genreScope='artist', releaseDate='2008'))
+                def patch_art(route):
+                    try:
+                        response = route.fetch()
+                        data = response.json()
+                        data['state'].update(art_patch)
+                        route.fulfill(response=response, body=json.dumps(data))
+                    except Exception:
+                        pass
+                page.route('**/api/state*', patch_art)
                 page.evaluate("""([broken, recovered]) => {
                     snapshot.state.cachedCover = broken;
                     snapshot.state.cover = 'https://art.example.test/missing.jpg';
@@ -200,6 +212,7 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 assert 'Local%20test%20session%20Late%20afternoon' in page.locator('#youtube-search').get_attribute('href')
                 assert page.locator('iframe').count() == 0
                 assert youtube_requests == []
+                page.unroute('**/api/state*')
                 page.evaluate("""() => {
                     snapshot.state.cachedCover = '';
                     snapshot.state.cover = '';
@@ -216,11 +229,16 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 dj_station = dict(real, llmReady=True, voiceReady=True, talk=False, hop=False, hopSongs=4, enabled=False,
                                   theme='A varied mix', settings=dict(real.get('settings', {}), dj_name='DJ Test'))
                 dj_voice = {'id': 0, 'status': 'idle', 'text': '', 'error': ''}
+                state_patch = {}
                 def inject(route):
-                    response = route.fetch()
-                    data = response.json()
-                    data.update(djStation=dj_station, djVoice=dj_voice)
-                    route.fulfill(response=response, body=json.dumps(data))
+                    try:
+                        response = route.fetch()
+                        data = response.json()
+                        data.update(djStation=dj_station, djVoice=dj_voice)
+                        data['state'].update(state_patch)
+                        route.fulfill(response=response, body=json.dumps(data))
+                    except Exception:
+                        pass  # The page navigated or the route was removed mid-poll.
                 page.route('**/api/state*', inject)
                 dj_posts = []
                 def dj_post(route):
@@ -254,6 +272,7 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 assert page.locator('#dj-booth #dj-text, #dj-booth #dj-introduce').count() == 0
                 dj_voice.update(status='done')
                 page.locator('.nav[data-view="settings"]').click()
+                page.locator('#settings-tab-dj').click()
                 page.locator('#dj-text').fill('Another song coming your way!')
                 page.locator('#dj-text').press('Enter')
                 page.wait_for_function("() => document.getElementById('dj-text').value === ''")
@@ -264,15 +283,16 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 # Each control needs what it uses; with neither provider there is no DJ.
                 dj_station.update(llmReady=False)
                 page.evaluate('([station, voice]) => { snapshot.djStation = station; snapshot.djVoice = voice; render(snapshot); }', [dj_station, dj_voice])
-                assert page.locator('#dj-introduce').is_hidden() and page.locator('#dj-say').is_visible()
+                page.wait_for_function("() => document.getElementById('dj-introduce').hidden && !document.getElementById('dj-say').hidden")
                 dj_station.update(voiceReady=False)
                 page.evaluate('([station, voice]) => { snapshot.djStation = station; snapshot.djVoice = voice; render(snapshot); }', [dj_station, dj_voice])
-                assert page.locator('.dj-try').is_hidden()
+                page.wait_for_function("() => document.querySelector('.dj-try').hidden")
                 page.locator('.nav[data-view="player"]').click()
-                assert page.locator('#dj-booth').is_hidden()
+                page.wait_for_function("() => document.getElementById('dj-booth').hidden")
                 dj_station.update(llmReady=True, voiceReady=True)
                 page.evaluate('([station, voice]) => { snapshot.djStation = station; snapshot.djVoice = voice; render(snapshot); }', [dj_station, dj_voice])
                 # Song links are right-aligned icons in the controls.
+                state_patch['metadata'] = {'recordingId': '0f2ec8d4-5c4a-4f43-9d0f-0b1f8a2a1a11'}
                 page.evaluate("snapshot.state.metadata = {recordingId: '0f2ec8d4-5c4a-4f43-9d0f-0b1f8a2a1a11'}; render(snapshot)")
                 assert page.locator('#youtube-search svg').count() == 1 and page.locator('#metadata-source svg').count() == 1
                 assert page.locator('#metadata-source').is_visible()
@@ -289,6 +309,72 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 for path in ('control', 'announce', 'introduce'):
                     page.unroute('**/api/dj/' + path)
                 print('PASS: DJ booth in the controls, server-driven state, switches, stop, Settings lines and intros, icon links')
+                # Library groups by metadata in tabs; rows are reused, not rebuilt, between refreshes.
+                page.locator('.nav[data-view="library"]').click()
+                page.wait_for_function("() => document.querySelectorAll('#saved-songs .saved-song').length === 2")
+                first_row = page.evaluate_handle("document.querySelector('#saved-songs .saved-song')")
+                page.evaluate("savedSongs = JSON.parse(JSON.stringify(savedSongs)); libraryRenderKey = ''; renderLibrary()")
+                assert page.evaluate("row => row === document.querySelector('#saved-songs .saved-song')", first_row)
+                page.locator('#library-tab-artists').click()
+                assert page.locator('.library-group').count() == 1
+                assert page.locator('.library-group strong').text_content() == 'Local test session'
+                assert '2 songs' in page.locator('.library-group small').text_content()
+                page.locator('.library-group > summary').click()
+                page.wait_for_function("() => document.querySelectorAll('.library-group-songs .saved-song').length === 2")
+                page.locator('#library-tab-albums').click()
+                assert page.locator('.library-group strong').all_text_contents() == ['Offline collection']
+                assert page.locator('.library-group small').text_content().startswith('Local test session · 2 songs')
+                def with_genres(route):
+                    response = route.fetch()
+                    data = response.json()
+                    for index, song in enumerate(data['songs']):
+                        song['genres'] = ['jazz'] if index else ['ambient', 'jazz']
+                    route.fulfill(response=response, body=json.dumps(data))
+                page.route('**/api/library', with_genres)
+                page.evaluate('refreshLibrary()')
+                page.wait_for_function("() => savedSongs.every(song => song.genres?.includes('jazz'))")
+                page.locator('#library-tab-genres').click()
+                assert page.locator('.library-group strong').all_text_contents() == ['ambient', 'jazz']
+                page.locator('#library-search').fill('ambient')
+                assert page.locator('.library-group strong').all_text_contents() == ['ambient', 'jazz']
+                page.locator('#library-search').fill('')
+                page.locator('#library-tab-songs').click()
+                page.unroute('**/api/library')
+                # Stations: with one match, Enter plays it.
+                station_patch = dict(stations=[dict(id='s1', name='Jazz radio', quickMix=False), dict(id='s2', name='Punk radio', quickMix=False)], offline=False)
+                def with_stations(route):
+                    try:
+                        response = route.fetch()
+                        data = response.json()
+                        data['state'].update(station_patch)
+                        for action in data['state'].get('actions', []):
+                            if action['id'] == 'act_stationchange':
+                                action['enabled'] = True
+                        route.fulfill(response=response, body=json.dumps(data))
+                    except Exception:
+                        pass
+                page.route('**/api/state*', with_stations)
+                page.evaluate("""([patch]) => {
+                    window.stationCommands = [];
+                    window.realCommand = command;
+                    command = message => { stationCommands.push(message); return Promise.resolve(true); };
+                    Object.assign(snapshot.state, patch);
+                    snapshot.state.actions.forEach(action => { if (action.id === 'act_stationchange') action.enabled = true; });
+                    stationRenderKey = '';
+                    render(snapshot);
+                }""", [station_patch])
+                page.locator('.nav[data-view="stations"]').click()
+                page.locator('#station-search').fill('radio')
+                page.locator('#station-search').press('Enter')
+                assert page.evaluate('stationCommands') == []
+                page.locator('#station-search').fill('punk')
+                page.locator('#station-search').press('Enter')
+                assert page.evaluate('stationCommands') == [{'selectStation': 's2'}]
+                page.locator('#station-search').fill('')
+                page.unroute('**/api/state*')
+                page.evaluate("command = realCommand; snapshot.state.stations = []; snapshot.state.offline = true; stationRenderKey = ''; render(snapshot)")
+                page.locator('.nav[data-view="player"]').click()
+                print('PASS: library tabs by artist/album/genre with reused rows; single-match Enter plays a station')
                 assert page.locator('#shortcut-list').is_hidden()
                 page.locator('#shortcuts-title').click()
                 assert page.locator('#shortcut-list').is_visible()
@@ -434,10 +520,16 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 page.locator('.nav[data-view="settings"]').click()
                 page.wait_for_function("() => document.getElementById('save-settings').disabled === false")
                 assert page.locator('#activity').is_hidden()
+                # Settings are tabs over one form: edits on every tab save together.
+                page.locator('#settings-tab-listening').click()
+                assert page.locator('#settings-panel-dj').is_hidden()
                 page.locator('#setting-audio_quality').select_option('medium')
                 page.locator('#setting-audio_buffer_ms').fill('350')
+                page.locator('#settings-tab-connections').click()
+                assert page.locator('#settings-panel-listening').is_hidden()
                 page.locator('#setting-dj-llm_url').fill('http://127.0.0.1:1234/v1/chat/completions')
                 page.locator('#setting-dj-model').fill('test-dj-model')
+                page.locator('#settings-tab-dj').click()
                 page.route('**/api/dj/voices', lambda route: route.fulfill(content_type='application/json', body=json.dumps({'voices': ['am_onyx', 'af_heart'], 'default': 'am_onyx', 'configured': True})))
                 page.locator('#refresh-dj-voices').click()
                 page.wait_for_function("() => document.querySelectorAll('#setting-dj-voice option').length === 3")
@@ -467,12 +559,14 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 page.locator('#setting-dj-theme').fill('London punk')
                 page.locator('#setting-dj-dj_name').fill('DJ Rook')
                 page.locator('#setting-dj-listener_name').fill('Bake')
-                page.locator('#setting-dj-set_mode').select_option('minutes')
-                page.locator('#setting-dj-set_minutes').fill('20')
                 page.locator('#setting-dj-set_songs').fill('3')
+                page.locator('#setting-dj-set_mode').select_option('minutes')
+                assert page.locator('#setting-dj-set_songs').is_hidden()
+                page.locator('#setting-dj-set_minutes').fill('20')
                 page.locator('#setting-dj-play_over_music').uncheck()
+                page.locator('#settings-tab-connections').click()
                 page.locator('#setting-dj-tts_key').fill('private-browser-voice-key')
-                page.get_by_role('button', name='Save settings', exact=True).click()
+                page.get_by_role('button', name='Save', exact=True).click()
                 page.wait_for_function("() => document.getElementById('settings-status').textContent.startsWith('Saved.')")
                 assert 'audio_quality = medium' in (config / 'config').read_text()
                 assert 'audio_buffer_ms = 350' in (config / 'config').read_text()
@@ -488,6 +582,8 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 assert 'private-browser-voice-key' not in json.dumps(request('/api/settings'))
                 page.reload()
                 page.wait_for_function("() => document.getElementById('setting-audio_buffer_ms').value === '350'")
+                # The last tab is remembered.
+                assert page.locator('#settings-panel-connections').is_visible()
                 assert page.locator('#setting-password').input_value() == ''
                 assert page.locator('#setting-dj-model').input_value() == 'test-dj-model'
                 assert page.locator('#setting-dj-theme').input_value() == 'London punk'

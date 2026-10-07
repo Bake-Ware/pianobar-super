@@ -254,6 +254,12 @@ void BarWebState (const BarApp_t *app) {
 		if (name != NULL) { json_object_array_add (queuedIds, json_object_new_string (name + 1)); }
 	}
 	json_object_object_add (object, "queuedSavedIds", queuedIds);
+	/* The next song in the playlist, online or offline, so the DJ can write
+	 * and voice its introduction before it starts. */
+	const PianoSong_t *upcoming = song == NULL ? NULL : PianoListNextP (song);
+	string (object, "nextTitle", upcoming == NULL ? NULL : upcoming->title);
+	string (object, "nextArtist", upcoming == NULL ? NULL : upcoming->artist);
+	string (object, "nextAlbum", upcoming == NULL ? NULL : upcoming->album);
 	string (object, "title", song == NULL ? NULL : song->title);
 	string (object, "artist", song == NULL ? NULL : song->artist);
 	string (object, "album", song == NULL ? NULL : song->album);
