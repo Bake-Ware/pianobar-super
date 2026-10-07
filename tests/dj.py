@@ -472,6 +472,69 @@ class DJTests(unittest.TestCase):
         self.session.exited = True
         self.session.dj.intro_event.set()
 
+    def test_hopping_queues_each_station_once_and_announces_the_switch(self):
+        import time
+        from unittest.mock import Mock
+        stations = [dict(id='A', name='Alpha Radio', quickMix=False), dict(id='B', name='Beta Radio', quickMix=False),
+                    dict(id='C', name='Gamma Radio', quickMix=False), dict(id='Q', name='Shuffle', quickMix=True)]
+        sent = []
+        self.session.status = Mock()
+        self.session.status.send.side_effect = lambda data: sent.append(json.loads(data))
+        dj = self.session.dj
+        dj.hop, dj.hop_songs = True, 2
+        def play(title, station, **extra):
+            self.session.pending = False
+            self.session.state = dict(dict(title=title, artist='Artist', album='', station=dict((s['id'], s['name']) for s in stations)[station],
+                                           stationId=station, offline=False, output='browser', elapsed=0, stations=stations), **extra)
+            dj.on_state(self.session.state)
+        play('One', 'A')
+        self.assertEqual(sent, [])
+        play('Two', 'A')
+        first = sent[-1]
+        self.assertEqual(first['type'], 'queue_station')
+        self.assertIn(first['id'], ('B', 'C'))
+        # Repeated state updates for the same song neither recount nor requeue.
+        self.session.pending = False
+        for _ in range(3):
+            dj.on_state(dict(self.session.state, nextStationId=first['id']))
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(dj.station_public()['hopNext'], first['id'])
+        play('Three', first['id'])
+        self.assertEqual((dj.hop_count, dj.hop_arrival), (1, first['id']))
+        play('Four', first['id'])
+        # Every other station is visited before any repeat, and never QuickMix.
+        self.assertEqual(sent[-1]['id'], ({'B', 'C'} - {first['id']}).pop())
+        # The player declined that request: the DJ picks again.
+        self.session.pending = False
+        dj.on_state(dict(self.session.state, nextStationId=None))
+        self.assertEqual(len(sent), 3)
+        self.assertNotIn('Q', [packet['id'] for packet in sent])
+        # A listener's own station change restarts the count without an announcement.
+        play('Five', 'Q')
+        self.assertEqual((dj.hop_count, dj.hop_arrival), (1, None))
+        # Arriving on a hopped station, a talking DJ mentions the switch.
+        dj.talk = True
+        play('Six', 'Q')
+        target = sent[-1]['id']
+        play('Seven', target, elapsed=4)
+        deadline = time.monotonic() + 3
+        while not self.spoken and time.monotonic() < deadline:
+            time.sleep(.01)
+        self.assertEqual(len(self.spoken), 1)
+        prompts = [body['messages'][0]['content'] for path, body, _ in self.calls if path == '/chat']
+        self.assertIn('switched to', prompts[-1])
+        self.assertTrue(json.loads([body for path, body, _ in self.calls if path == '/chat'][-1]['messages'][1]['content'])['newStation'])
+        # Hopping never runs offline.
+        dj.on_state(dict(self.session.state, offline=True, title='Eight'))
+        self.request('/api/dj/control', {'hop': 'yes'}, expected=400)
+
+    def test_browser_reports_playback_glitches(self):
+        client = self.listening_client
+        self.request('/api/clients/heartbeat', {'id': client, 'status': 'playing', 'ready': True, 'underruns': 3, 'resyncs': 1})
+        page = next(p for p in self.request('/api/clients')['clients'] if p['id'] == client)
+        self.assertEqual((page['underruns'], page['resyncs']), (3, 1))
+        self.request('/api/clients/heartbeat', {'id': client, 'status': 'playing', 'ready': True, 'underruns': -1}, expected=400)
+
     def test_station_intros_stay_silent_unless_the_dj_talks(self):
         from unittest.mock import Mock
         first, second = 'a' * 64 + '.mka', 'b' * 64 + '.mka'

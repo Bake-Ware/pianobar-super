@@ -94,7 +94,8 @@ window.addEventListener('storage', event => {
 });
 let coverSource = '', coverAttempt = 0, coverRetry, coverCandidates = [], coverCandidate = 0;
 let djBusy = false;
-let audioBufferSeconds = .9;
+// Audio crosses tunnels and Wi-Fi; a deeper cushion rides out their stalls.
+let audioBufferSeconds = 1.5;
 const audioStats = {underruns: 0, resyncs: 0};
 let settingsLoaded = false, settingsBusy = false, setupShown = false;
 const audioSources = new Set();
@@ -136,7 +137,7 @@ async function pollBrowser() {
   try {
     await registerBrowser();
     const page = await browserRequest('heartbeat', {id: browserId, status: browserPlaybackStatus(),
-      ready: audioContext?.state === 'running'});
+      ready: audioContext?.state === 'running', ...audioStats});
     browserLastSeen = performance.now();
     if (mutation !== browserMutation) return;
     browserDesired = page.enabled;
@@ -593,14 +594,14 @@ function queueAudio(data, rate, channels, little, epoch) {
   // Network reads arrive in bursts. Keep contiguous samples scheduled through
   // those bursts instead of destroying the queue whenever it exceeds a second.
   // Only resync truly stale audio (for example after a device wakes from sleep).
-  if (audioNextTime > now + 8) {
+  if (audioNextTime > now + 12) {
     clearAudioQueue();
     ++audioStats.resyncs;
   }
   if (audioNextTime < now + .02) {
     if (audioNextTime) {
       ++audioStats.underruns;
-      audioBufferSeconds = Math.min(2.5, audioBufferSeconds + .4);
+      audioBufferSeconds = Math.min(4, audioBufferSeconds + .5);
     }
     audioNextTime = now + audioBufferSeconds;
   }
@@ -731,20 +732,32 @@ function djSong(song) { return `${song.artist || 'Unknown artist'} — ${song.ti
 function renderDJ(data) {
   const station = data.djStation || {}, voice = data.djVoice || {}, state = data.state || {};
   const playerUp = !data.exited && !data.playerStopped && !data.restarting && !data.setupRequired;
-  const llm = !!station.llmReady, voiced = !!station.voiceReady, talk = !!station.talk;
-  const active = ['writing', 'preparing', 'on_air'].includes(voice.status);
-  const label = djVoiceStates[voice.status] || djStationStates[station.enabled && station.status] ||
-    (station.enabled ? 'Running the station' : talk ? 'Standing by' : 'Off');
+  const llm = !!station.llmReady, voiced = !!station.voiceReady, talk = !!station.talk, hop = !!station.hop;
   const booth = $('dj-booth');
-  booth.dataset.state = voice.status === 'on_air' ? 'on-air' : active || djStationStates[station.enabled && station.status] ? 'busy' :
-    talk || station.enabled ? 'ready' : 'off';
+  // Without an LLM or a voice there is no DJ to show.
+  booth.hidden = !llm && !voiced;
+  if (booth.hidden) return;
+  const active = ['writing', 'preparing', 'on_air'].includes(voice.status);
+  const busyStation = djStationStates[station.enabled && station.status];
+  const label = djVoiceStates[voice.status] || busyStation ||
+    (station.enabled ? 'Running the station' : hop ? 'Hopping stations' : talk ? 'Standing by' : 'Off');
+  booth.dataset.state = voice.status === 'on_air' ? 'on-air' : active || busyStation ? 'busy' :
+    talk || station.enabled || hop ? 'ready' : 'off';
   $('dj-state').textContent = label;
   $('dj-name').textContent = station.settings?.dj_name || 'Your DJ';
 
-  if (document.activeElement !== $('dj-talk') && !djBusy) $('dj-talk').checked = talk;
-  if (document.activeElement !== $('dj-station-enabled') && !djBusy) $('dj-station-enabled').checked = !!station.enabled;
-  $('dj-talk').disabled = djBusy || !voiced;
-  $('dj-station-enabled').disabled = djBusy || !llm;
+  if (!djBusy) {
+    $('dj-talk').checked = talk;
+    $('dj-station-enabled').checked = !!station.enabled;
+    $('dj-hop').checked = hop;
+  }
+  // Each switch only appears when what it needs is configured.
+  $('dj-talk-switch').hidden = !voiced;
+  $('dj-pick-switch').hidden = !llm;
+  $('dj-talk').disabled = $('dj-station-enabled').disabled = $('dj-hop').disabled = djBusy;
+  $('dj-pick-switch').title = state.offline || station.enabled ? 'Builds sets from your saved songs' : 'Builds sets from your saved songs (switches to offline playback)';
+  $('dj-hop').disabled = djBusy || (!hop && !!state.offline);
+  $('dj-hop-switch').title = state.offline && !hop ? 'Reconnect to Pandora to hop stations' : `Moves to a random Pandora station every ${station.hopSongs || 4} songs`;
   if (document.activeElement !== $('dj-theme') && !$('dj-theme').dataset.edited) $('dj-theme').value = station.theme || '';
 
   // The last line stays up after it airs so you can read what was said.
@@ -757,23 +770,29 @@ function renderDJ(data) {
   const notices = [];
   if (voice.status === 'error' && voice.error) notices.push(voice.error);
   if (station.enabled && station.status === 'error' && station.error) notices.push(station.error);
-  if (!llm) notices.push('Add an LLM endpoint and model in Settings so the DJ can write intros and pick music.');
-  if (!voiced) notices.push('Add a voice endpoint in Settings, or install espeak-ng on the server, so the DJ can talk.');
   $('dj-notice').hidden = !notices.length;
   $('dj-notice-text').textContent = notices.join(' ');
-  $('dj-notice-link').hidden = llm && voiced;
+  $('dj-notice-link').hidden = true;
 
   const playing = playerUp && !!state.title;
-  $('dj-introduce').disabled = !playing || !llm || !voiced || active;
-  $('dj-say').disabled = !playing || !voiced;
-  $('dj-text').disabled = !playerUp || !voiced;
+  $('dj-line-form').hidden = !voiced;
+  $('dj-introduce').hidden = !llm;
+  $('dj-introduce').disabled = !playing || active;
+  $('dj-say').disabled = !playing;
+  $('dj-text').disabled = !playerUp;
 
   const set = station.currentSet, next = station.next;
   const items = set ? set.songs.map((song, index) => ({song, now: index + 1 === set.position, done: index + 1 < set.position}))
     : next?.songs ? next.songs.map(song => ({song})) : next ? [{song: next}] : [];
-  $('dj-lineup-title').textContent = set ? `This set · ${set.position} of ${set.songs.length}${set.duration ? ' · ' + time(set.duration) : ''}` :
-    next?.songs ? `Next set · ${next.songs.length} songs${next.duration ? ' · ' + time(next.duration) : ''}` : 'Up next';
   if (set && next && !next.songs && !set.songs.some(song => song.id === next.id)) items.push({song: next, after: true});
+  const stationName = id => (state.stations || []).find(item => item.id === id)?.name;
+  const hopNext = hop && station.hopNext ? stationName(station.hopNext) : '';
+  $('dj-lineup-title').textContent = set ? `This set · ${set.position} of ${set.songs.length}${set.duration ? ' · ' + time(set.duration) : ''}` :
+    next?.songs ? `Next set · ${next.songs.length} songs${next.duration ? ' · ' + time(next.duration) : ''}` :
+    next ? 'Up next' : hopNext ? 'Next station: ' + hopNext : hop && !state.offline ? `Station hop · ${station.hopCount || 0} of ${station.hopSongs || 4}` : 'Lineup & theme';
+  $('dj-hop-status').hidden = !hop || !!state.offline;
+  $('dj-hop-status').textContent = hopNext ? `Switching to ${hopNext} after this song.` :
+    `Song ${Math.max(1, station.hopCount || 0)} of ${station.hopSongs || 4} on ${state.station || 'this station'}, then a random station.`;
   const signature = JSON.stringify(items.map(item => [item.song.id, item.now, item.done, item.after]));
   if ($('dj-queue').dataset.signature !== signature) {
     $('dj-queue').dataset.signature = signature;
@@ -786,9 +805,10 @@ function renderDJ(data) {
     }));
   }
   $('dj-queue').hidden = !items.length;
-  $('dj-lineup-empty').hidden = !!items.length;
+  $('dj-lineup-empty').hidden = !!items.length || !llm;
   $('dj-lineup-empty').textContent = station.enabled ? 'The DJ is lining up songs from your library…' :
-    'Turn on “Picks the music” and the DJ builds sets from your saved songs.';
+    'Turn on “Picks music” and the DJ builds sets from your saved songs.';
+  $('dj-theme-form').hidden = !llm;
 }
 async function djControl(change) {
   djBusy = true;
@@ -807,6 +827,7 @@ async function djJSON(path, message) {
   return data;
 }
 $('dj-talk').addEventListener('change', event => djControl({talk: event.target.checked}));
+$('dj-hop').addEventListener('change', event => djControl({hop: event.target.checked}));
 $('dj-station-enabled').addEventListener('change', event => {
   const change = {enabled: event.target.checked};
   if ($('dj-theme').value.trim()) change.theme = $('dj-theme').value;
@@ -1005,7 +1026,7 @@ $('sample-dj-voice').addEventListener('click', async () => {
 $('setting-dj-voice').addEventListener('change', () => { stopVoiceSample(); $('voice-sample-status').textContent = 'Preview this voice, or save settings to apply it immediately.'; });
 window.addEventListener('pagehide', stopVoiceSample);
 
-const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'dj_name', 'listener_name'];
+const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'dj_name', 'listener_name', 'hop_songs'];
 const settingsKeys = ['user', 'cache_dir', 'cache_songs', 'offline', 'offline_fallback', 'audio_quality', 'audio_buffer_ms'];
 async function loadSettings(force = false) {
   if (settingsBusy || (settingsLoaded && !force)) return;

@@ -117,6 +117,20 @@ void BarWebPoll (BarApp_t *app) {
 			ack = false;
 			BarPlayerStopVoice (&app->player);
 			BarWebState (app);
+		} else if (strcmp (json_object_get_string (type), "queue_station") == 0) {
+			/* Switch after the current song instead of skipping it. */
+			PianoStation_t *station = PianoFindStationById (app->ph.stations,
+					json_object_get_string (id));
+			if (!app->offline && !app->doQuit && app->modeRequest == 0 && station != NULL) {
+				app->nextStation = station;
+				if (app->playlist != NULL) {
+					PianoDestroyPlaylist (PianoListNextP (app->playlist));
+					app->playlist->head.next = NULL;
+				}
+				BarWebState (app);
+			} else {
+				BarUiMsg (&app->settings, MSG_ERR, "That station is unavailable.\n");
+			}
 		} else if (strcmp (json_object_get_string (type), "select_station") == 0) {
 			PianoStation_t *station = PianoFindStationById (app->ph.stations,
 					json_object_get_string (id));

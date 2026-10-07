@@ -24,6 +24,7 @@
     <div id="sidebar-tools" class="sidebar-controls" data-views="player stations library">
       <details id="station-controls" class="sidebar-group"><summary>Find your next favorite</summary><p>Shape the station. Follow your curiosity.</p><div id="station-actions" class="action-grid"></div></details>
       <details id="library-controls" data-views="player stations" class="sidebar-group"><summary>Make it yours</summary><p>Keep the good ones close, even offline.</p><div id="library-actions" class="action-grid"></div></details>
+      <details id="more-controls" class="sidebar-group"><summary>More controls</summary><p>Every other pianobar command.</p><div id="more-actions" class="action-grid"></div></details>
     </div>
     <div class="sidebar-bottom"><span class="little-record"></span><p>A little radio.<br>A lot of possibility.</p><small>Made for listening.</small></div>
     </div>
@@ -42,29 +43,24 @@
         <div class="progress-wrap"><progress id="progress" max="1" value="0" aria-label="Song progress"></progress><div class="times"><span id="elapsed">0:00</span><span id="duration">0:00</span></div></div>
         <div class="transport"><div class="transport-main"><button class="icon-button" data-action="act_songlove" aria-label="Love song" title="Love song" disabled>♡</button><button id="play-button" class="play-button" data-action="act_songpausetoggle" aria-label="Pause playback" disabled>Ⅱ</button><button class="icon-button skip" data-action="act_songnext" aria-label="Next song" title="Next song" disabled><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16l11-8zM18 4h3v16h-3z"/></svg></button></div><div class="volume"><button data-action="act_voldown" aria-label="Decrease volume" disabled>−</button><span id="volume">0 dB</span><button data-action="act_volup" aria-label="Increase volume" disabled>+</button></div></div>
         <div class="track-actions"><button data-action="act_songban" disabled>⊘ Ban track</button><button data-action="act_songtired" disabled>◷ Take a break</button><button data-action="act_bookmark" disabled>＋ Bookmark</button></div>
+        <section id="dj-booth" class="dj-booth" data-state="off" aria-labelledby="dj-name" hidden>
+          <div class="dj-top"><span class="dj-light" aria-hidden="true"></span><h3 id="dj-name">Your DJ</h3><p id="dj-state" class="dj-state" role="status">Off</p></div>
+          <div class="dj-switches">
+            <label class="dj-switch" id="dj-talk-switch"><input id="dj-talk" type="checkbox" role="switch"><span class="dj-track" aria-hidden="true"></span>Talks</label>
+            <label class="dj-switch" id="dj-pick-switch" title="Builds sets from your saved songs while offline"><input id="dj-station-enabled" type="checkbox" role="switch"><span class="dj-track" aria-hidden="true"></span>Picks music</label>
+            <label class="dj-switch" id="dj-hop-switch" title="Moves to a random Pandora station every few songs"><input id="dj-hop" type="checkbox" role="switch"><span class="dj-track" aria-hidden="true"></span>Hops stations</label>
+          </div>
+          <div id="dj-mic" class="dj-mic" hidden><blockquote id="dj-line" aria-live="polite"></blockquote><button id="dj-stop" class="dj-button" type="button" hidden>■ Stop</button></div>
+          <p id="dj-notice" class="dj-notice" hidden><span id="dj-notice-text"></span> <a id="dj-notice-link" href="#settings">Open DJ settings</a></p>
+          <form id="dj-line-form" class="dj-say"><div class="dj-field"><input id="dj-text" maxlength="700" placeholder="Give the DJ a line…" aria-label="Give the DJ a line" autocomplete="off" required><button id="dj-say" class="dj-button" type="submit">Speak</button></div><button id="dj-introduce" class="dj-button" type="button" title="Introduce this song">Introduce</button></form>
+          <details id="dj-more" class="dj-more"><summary><span id="dj-lineup-title">Up next</span></summary>
+            <p id="dj-hop-status" class="dj-empty" hidden></p>
+            <ol id="dj-queue" hidden></ol><p id="dj-lineup-empty" class="dj-empty"></p>
+            <form id="dj-theme-form" class="dj-form"><label for="dj-theme">Station theme</label><div class="dj-field"><input id="dj-theme" maxlength="450" placeholder="A varied mix from my saved music" autocomplete="off"><button class="dj-button" type="submit">Set</button></div></form>
+          </details>
+        </section>
         <div class="audio-output"><label for="audio-output">Audio output</label><select id="audio-output"><option value="host">Host</option><option value="browser">Browser</option><option value="both">Both</option></select><button id="listen-button" type="button">Listen here</button><label for="browser-name">This browser</label><input id="browser-name" maxlength="80" placeholder="Name this browser" aria-label="This browser name"><span id="audio-status" role="status"></span></div>
-        <section class="utility"><details><summary>More controls <span>+</span></summary><div id="more-actions" class="more-actions"></div></details></section>
         </div>
-      </div>
-    </section>
-    <section id="dj-booth" data-views="player" class="dj-booth" data-state="off" aria-labelledby="dj-name">
-      <div class="dj-top">
-        <div class="dj-ident"><span class="dj-light" aria-hidden="true"></span><div><p class="dj-eyebrow">DJ BOOTH</p><h2 id="dj-name">Your DJ</h2></div></div>
-        <p id="dj-state" class="dj-state" role="status">Off</p>
-        <div class="dj-switches">
-          <label class="dj-switch"><input id="dj-talk" type="checkbox" role="switch"><span class="dj-track" aria-hidden="true"></span>Talks</label>
-          <label class="dj-switch"><input id="dj-station-enabled" type="checkbox" role="switch"><span class="dj-track" aria-hidden="true"></span>Picks the music</label>
-        </div>
-      </div>
-      <div id="dj-mic" class="dj-mic" hidden><blockquote id="dj-line" aria-live="polite"></blockquote><button id="dj-stop" class="dj-button" type="button" hidden>■ Stop</button></div>
-      <p id="dj-notice" class="dj-notice" hidden><span id="dj-notice-text"></span> <a id="dj-notice-link" href="#settings">Open DJ settings</a></p>
-      <div class="dj-body">
-        <div class="dj-desk">
-          <form id="dj-line-form" class="dj-form"><label for="dj-text">Give the DJ a line</label><div class="dj-field"><input id="dj-text" maxlength="700" placeholder="Coming at ya with some London punk…" autocomplete="off" required><button id="dj-say" class="dj-button" type="submit">Speak</button></div></form>
-          <button id="dj-introduce" class="dj-button dj-wide" type="button">Introduce this song</button>
-          <form id="dj-theme-form" class="dj-form"><label for="dj-theme">Station theme</label><div class="dj-field"><input id="dj-theme" maxlength="450" placeholder="A varied mix from my saved music" autocomplete="off"><button class="dj-button" type="submit">Set</button></div></form>
-        </div>
-        <div class="dj-lineup"><p id="dj-lineup-title" class="dj-eyebrow">Up next</p><ol id="dj-queue" hidden></ol><p id="dj-lineup-empty" class="dj-empty"></p></div>
       </div>
     </section>
     <section id="shortcut-legend" data-views="player" class="shortcut-legend" aria-labelledby="shortcuts-title">
@@ -121,6 +117,7 @@
             <label>DJ set size<select id="setting-dj-set_mode"><option value="songs">Number of songs</option><option value="minutes">Minutes of music</option></select></label>
             <label>Songs per set<input id="setting-dj-set_songs" type="number" min="1" max="30" value="1"></label>
             <label>Target minutes per set<input id="setting-dj-set_minutes" type="number" min="1" max="120" value="15"></label>
+            <label>Songs per station when hopping<input id="setting-dj-hop_songs" type="number" min="1" max="20" value="4"></label>
             <label>Voice endpoint URL<input id="setting-dj-tts_url" type="url" maxlength="450" placeholder="https://your-voice-server/api/voice"></label>
             <label>Voice<select id="setting-dj-voice"><option value="">Use the voice server’s default</option></select></label>
             <label>Voice bearer key<input id="setting-dj-tts_key" type="password" autocomplete="new-password" maxlength="450" placeholder="Leave blank to keep saved key"></label>

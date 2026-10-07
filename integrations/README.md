@@ -160,7 +160,7 @@ Provider URLs and credentials stay in the private server DJ configuration.
 | `cmd.pianobar-queue` | Native queued cached track and shared DJ plan |
 | `cmd.pianobar-queue-saved` | `id`: queue a library ID after the current cached track |
 | `cmd.pianobar-dj` | DJ context, provider readiness and station state |
-| `cmd.pianobar-dj-control` | `json`: any of `{ "enabled": true, "talk": true, "stopVoice": true, "theme": "London punk", "style": "A lively radio DJ" }` |
+| `cmd.pianobar-dj-control` | `json`: any of `{ "enabled": true, "talk": true, "hop": true, "stopVoice": true, "theme": "London punk", "style": "A lively radio DJ" }` |
 | `cmd.pianobar-dj-pick` | `json`: select one track; queues by default; `{ "play": true }` plays immediately |
 | `cmd.pianobar-dj-introduce` | `json`: generate the current song's intro with optional `style` |
 | `cmd.pianobar-dj-speak` | `text`: speak a line over the music on every output |

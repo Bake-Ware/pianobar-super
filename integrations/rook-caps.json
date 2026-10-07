@@ -373,7 +373,7 @@
     "args": [
       "json"
     ],
-    "description": "Steer the DJ. JSON, any of: enabled (cached-song station on/off), talk (spoken intros on/off), stopVoice (cut the current line), theme, style.",
+    "description": "Steer the DJ. JSON, any of: enabled (cached-song station on/off), talk (spoken intros on/off), hop (random Pandora station every few songs on/off), stopVoice (cut the current line), theme, style.",
     "timeout": 65
   },
   {

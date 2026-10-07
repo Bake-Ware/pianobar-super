@@ -111,6 +111,16 @@ int main (int argc, char **argv) {
 	if (strncmp (argv[4], "voice", 5) == 0) {
 		assert (player.voice == NULL && player.voiceDoneId == 9 && player.duck == 1.0f);
 	}
+	if (strcmp (argv[4], "local") == 0) {
+		/* Browsers keep their buffered tail when a song ends on its own; only a
+		 * song cut short starts a new epoch, which tells them to drop it. */
+		const unsigned int epoch = player.audioEpoch;
+		BarPlayerReset (&player);
+		assert (player.audioEpoch == epoch);
+		player.doQuit = true;
+		BarPlayerReset (&player);
+		assert (player.audioEpoch == epoch + 1 && !player.doQuit);
+	}
 	BarCacheDownloadsShutdown (strcmp (argv[4], "shutdown") == 0);
 	BarCacheArtworkWait ();
 	curl_global_cleanup ();

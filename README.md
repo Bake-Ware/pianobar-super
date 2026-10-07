@@ -115,13 +115,21 @@ only contacted when you click the link; the player does not embed videos.
 
 ## LLM DJ and voice endpoint
 
-The **DJ booth** under Now playing has two switches:
+The **DJ booth** sits in the Now playing controls, under the track actions. It
+appears once an LLM or a voice is configured, and each switch only appears
+when what it needs is set up. (The remaining pianobar commands moved to
+**More controls** in the sidebar.)
 
 - **Talks**: the DJ introduces each new song once it has settled (about three
   seconds in), and reads any line you type into **Give the DJ a line**.
   **Introduce this song** asks for an introduction on demand; **Stop** cuts the
   current line.
-- **Picks the music**: the server chooses validated tracks from your saved
+- **Hops stations**: every few songs (Settings → **Songs per station when
+  hopping**, default 4), the DJ queues a random Pandora station. The current
+  song finishes first, every station is visited before any repeats, and
+  QuickMix is skipped. When Talks is on, the first intro on the new station
+  mentions the switch. Changing station yourself restarts the count.
+- **Picks music**: the server chooses validated tracks from your saved
   library around the **Station theme**, queues the next set while the current
   song finishes, and prepares one spoken summary for the start of each set. The
   booth lists the current and upcoming set. Recent tracks are excluded when
@@ -140,7 +148,8 @@ changing station or going online drops a line about the old song.
 The DJ only writes and picks music while someone can hear it: the player is not
 paused, and the output includes Host, or a browser is listening. **Talks** is
 remembered across restarts. The station picker starts off when the server
-starts, and reconnecting to Pandora stops it. Set **DJ name** and **Your name** to
+starts, and reconnecting to Pandora stops it. Hopping only runs online and is
+remembered across restarts. Set **DJ name** and **Your name** to
 personalize introductions. In Settings, size DJ sets by **Number of songs**
 (1–30) or **Minutes of music** (1–120); timed sets aim for the target using whole
 songs. Names, personality, theme, voice and set sizing apply on save without a
@@ -160,7 +169,7 @@ Alternatively, set these environment variables before starting the server, or pu
 corresponding fields in private `$XDG_CONFIG_HOME/pianobar/dj.json` (default
 `~/.config/pianobar/dj.json`). Environment variables take precedence. JSON fields
 are `llm_url`, `model`, `llm_key`, `style`, `tts_url`, `voice`, `tts_key`, optional `tts_ca`,
-and `talk`.
+`talk`, `hop` and `hop_songs`.
 
 | Variable | Purpose |
 | --- | --- |
@@ -196,7 +205,7 @@ An external agent can read song context, steer the DJ and give it lines to say:
 | --- | --- |
 | `GET /api/dj` | Current song, metadata, provider readiness, and `songKey` |
 | `POST /api/dj` | Generate `{text, songKey}`; optional `{style}` request |
-| `POST /api/dj/control` | Any of `{enabled, talk, stopVoice, theme, style}`: start/stop the station picker, turn the voice on/off, cut the current line, or change the theme or personality |
+| `POST /api/dj/control` | Any of `{enabled, talk, hop, stopVoice, theme, style}`: start/stop the station picker, turn the voice or station hopping on/off, cut the current line, or change the theme or personality |
 | `POST /api/dj/pick` | `{play?, theme?, style?}` selects one cached song; queues by default, `play: true` plays immediately |
 | `POST /api/dj/introduce` | Write and speak an introduction for the current song in the background; optional `{style}` |
 | `POST /api/dj/announce` | Speak `{text, songKey?}` through the player on every output, even when **Talks** is off |

@@ -138,7 +138,10 @@ void BarPlayerDestroy (player_t * const p) {
 }
 
 void BarPlayerReset (player_t * const p) {
-	++p->audioEpoch;
+	/* Browsers drop buffered audio when the epoch changes. Bump it only when a
+	 * song was cut short (skip, station change), so natural endings play out
+	 * and the next song follows gaplessly. */
+	if (p->doQuit) { ++p->audioEpoch; }
 	p->doQuit = false;
 	p->doPause = false;
 	p->outputError = false;
