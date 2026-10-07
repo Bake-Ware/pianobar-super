@@ -16,7 +16,8 @@
     <p class="eyebrow sidebar-label">YOUR LISTENING ROOM</p>
     <nav class="primary-nav" aria-label="Main navigation">
     <a class="nav active" href="#player" data-view="player" aria-current="page"><span id="nav-player-icon" aria-hidden="true">◉</span><img id="nav-cover" alt="" hidden> Now playing</a>
-    <a class="nav" href="#stations" data-view="stations"><span>≋</span> Stations</a>
+    <a class="nav" href="#stations" data-view="stations"><span aria-hidden="true"><svg class="nav-icon" viewBox="0 0 24 24" focusable="false"><path d="M7 7.5 17.5 3"/><rect x="2.5" y="7.5" width="19" height="13" rx="2"/><circle cx="15.5" cy="14" r="3"/><path d="M6 11.5h4M6 14.5h4M6 17.5h4"/></svg></span> Stations</a>
+    <a class="nav" href="#playlists" data-view="playlists"><span aria-hidden="true"><svg class="nav-icon" viewBox="0 0 24 24" focusable="false"><path d="M3 6h12M3 11h12M3 16h7"/><path d="M19 4v11.5"/><circle cx="16.5" cy="16.5" r="2.5"/><path d="M19 4l2.5 1"/></svg></span> Playlists</a>
     <a class="nav" href="#library" data-view="library"><span>▤</span> Library</a>
     <a class="nav" href="#settings" data-view="settings"><span>⚙</span> Settings</a>
     </nav>
@@ -24,44 +25,46 @@
     <div id="sidebar-tools" class="sidebar-controls" data-views="player stations library">
       <details id="station-controls" class="sidebar-group"><summary>Find your next favorite</summary><p>Shape the station. Follow your curiosity.</p><div id="station-actions" class="action-grid"></div></details>
       <details id="library-controls" data-views="player stations" class="sidebar-group"><summary>Make it yours</summary><p>Keep the good ones close, even offline.</p><div id="library-actions" class="action-grid"></div></details>
+      <details id="shortcut-legend" class="sidebar-group"><summary id="shortcuts-title">Keyboard shortcuts</summary><p>Use your pianobar keys anywhere outside text fields. Faded ones are unavailable right now.</p><div id="shortcut-list" class="shortcut-list"></div></details>
+      <details id="more-controls" class="sidebar-group"><summary>More controls</summary><p>Every other pianobar command.</p><div id="more-actions" class="action-grid"></div></details>
     </div>
     <div class="sidebar-bottom"><span class="little-record"></span><p>A little radio.<br>A lot of possibility.</p><small>Made for listening.</small></div>
     </div>
     <span id="connection" class="connection">Connecting…</span>
   </aside>
   <main>
-    <header><div class="breadcrumb" aria-label="Current station and track"><span id="station">No station selected</span><span class="breadcrumb-separator" aria-hidden="true">/</span><b id="current-track">Nothing playing</b></div><div class="header-actions"><button data-action="act_stationchange" class="mode-button" disabled>Change station</button><button id="mode-button" class="mode-button" data-action="act_offline" disabled>Go offline</button><button id="widget-toggle" class="theme-toggle" type="button" hidden>Widget mode</button><button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">Dark mode</button></div></header>
+    <header><div class="breadcrumb" aria-label="Current station and track"><span id="station">No station selected</span><span class="breadcrumb-separator" aria-hidden="true">/</span><a id="playlist-crumb" class="playlist-crumb" href="#playlists" hidden></a><span id="playlist-crumb-separator" class="breadcrumb-separator" aria-hidden="true" hidden>/</span><b id="current-track">Nothing playing</b></div><div class="header-actions"><button data-action="act_stationchange" class="mode-button" disabled>Change station</button><button id="mode-button" class="mode-button" data-action="act_offline" disabled>Go offline</button><button id="widget-toggle" class="theme-toggle" type="button" hidden>Widget mode</button><button id="theme-toggle" class="theme-toggle" type="button" aria-pressed="false">Dark mode</button></div></header>
     <section id="player" data-views="player" class="player-card" aria-label="Music player">
       <div class="artwork" id="artwork"><div class="record"><div class="record-label"><span>p</span><small>PIANOBAR RADIO</small></div></div><img id="cover" alt="Album artwork" hidden><span class="art-label">THE EVERYDAY SOUNDTRACK</span></div>
       <div class="player-content">
         <aside id="activity" data-views="player" class="activity-backdrop" aria-label="Player activity"><pre id="transcript" aria-label="Player output"></pre></aside>
-        <div class="player-controls"><div class="on-air"><span></span><span id="source">YOUR PERSONAL RADIO</span></div><h2 id="title">Something good is next.</h2><p id="artist" class="artist">Connect to your station and make yourself at home.</p><p id="album" class="album"></p>
+        <div class="player-controls"><div class="on-air"><span></span><span id="source">YOUR PERSONAL RADIO</span><div id="song-links" class="song-links" hidden>
+          <a id="youtube-search" target="_blank" rel="noopener noreferrer" title="Find on YouTube" aria-label="Find this song on YouTube"><svg viewBox="0 0 28 20" aria-hidden="true" focusable="false"><rect width="28" height="20" rx="5" fill="#ff0033"/><path d="M11 5.5v9l8-4.5z" fill="#fff"/></svg></a>
+          <a id="metadata-source" target="_blank" rel="noopener noreferrer" title="MusicBrainz" aria-label="Open this recording on MusicBrainz" hidden><svg viewBox="0 0 25 28" aria-hidden="true" focusable="false"><polygon points="12 0 0 7 0 21 12 28" fill="#ba478f"/><polygon points="13 0 25 7 25 21 13 28" fill="#eb743b"/></svg></a>
+        </div></div><h2 id="title">Something good is next.</h2><p id="artist" class="artist">Connect to your station and make yourself at home.</p><p id="album" class="album"></p>
         <p id="song-metadata" class="song-metadata" hidden></p>
-        <div id="song-links" class="song-links" hidden><a id="youtube-search" target="_blank" rel="noopener noreferrer">Find on YouTube ↗</a><a id="metadata-source" target="_blank" rel="noopener noreferrer" hidden>MusicBrainz ↗</a></div>
 
         <div class="progress-wrap"><progress id="progress" max="1" value="0" aria-label="Song progress"></progress><div class="times"><span id="elapsed">0:00</span><span id="duration">0:00</span></div></div>
-        <div class="transport"><div class="transport-main"><button class="icon-button" data-action="act_songlove" aria-label="Love song" title="Love song" disabled>♡</button><button id="play-button" class="play-button" data-action="act_songpausetoggle" aria-label="Pause playback" disabled>Ⅱ</button><button class="icon-button skip" data-action="act_songnext" aria-label="Next song" title="Next song" disabled><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16l11-8zM18 4h3v16h-3z"/></svg></button></div><div class="volume"><button data-action="act_voldown" aria-label="Decrease volume" disabled>−</button><span id="volume">0 dB</span><button data-action="act_volup" aria-label="Increase volume" disabled>+</button></div></div>
+        <div class="transport"><div class="transport-main"><button class="icon-button" data-action="act_songlove" aria-label="Love song" title="Love song" disabled>♡</button><button id="play-button" class="play-button" data-action="act_songpausetoggle" aria-label="Pause playback" disabled>Ⅱ</button><button class="icon-button skip" data-action="act_songnext" aria-label="Next song" title="Next song" disabled><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16l11-8zM18 4h3v16h-3z"/></svg></button><button id="listen-button" class="icon-button listen-button" type="button" aria-pressed="false" aria-label="Listen here" title="Listen here"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="5" height="7" rx="1.5"/><rect x="16" y="14" width="5" height="7" rx="1.5"/></svg></button></div><div class="volume"><button data-action="act_voldown" aria-label="Decrease volume" disabled>−</button><span id="volume">0 dB</span><button data-action="act_volup" aria-label="Increase volume" disabled>+</button></div></div>
         <div class="track-actions"><button data-action="act_songban" disabled>⊘ Ban track</button><button data-action="act_songtired" disabled>◷ Take a break</button><button data-action="act_bookmark" disabled>＋ Bookmark</button></div>
-        <div class="audio-output"><label for="audio-output">Audio output</label><select id="audio-output"><option value="host">Host</option><option value="browser">Browser</option><option value="both">Both</option></select><button id="listen-button" type="button">Listen here</button><label for="browser-name">This browser</label><input id="browser-name" maxlength="80" placeholder="Name this browser" aria-label="This browser name"><span id="audio-status" role="status"></span></div>
-        <details id="dj-controls" class="dj-controls"><summary>DJ mode</summary>
-          <label class="setting-check"><input id="dj-station-enabled" type="checkbox">Let the LLM pick songs from my local cache</label>
-          <label for="dj-theme">Station theme</label><input id="dj-theme" maxlength="450" value="A varied mix from my saved music">
-          <p id="dj-station-status" role="status">Cached-song DJ station is off.</p>
-          <label class="setting-check"><input id="dj-enabled" type="checkbox">Hear DJ introductions in this browser</label>
-          <label for="dj-style">DJ personality</label><input id="dj-style" maxlength="450" value="A warm, playful radio DJ. Keep it natural, varied and brief.">
-          <p class="settings-hint">Voice plays here. Music playing in this browser quiets while the DJ speaks.</p>
-          <p id="dj-status" role="status">DJ mode is off.</p><p id="dj-line" hidden></p>
-          <div class="dj-buttons"><button id="dj-introduce" type="button" disabled>Introduce this song</button><button id="dj-stop" type="button" disabled>Stop voice</button></div>
-          <form id="dj-line-form"><label for="dj-text">Give the DJ a line</label><div><input id="dj-text" maxlength="700" placeholder="Coming at ya with some London punk…" required><button id="dj-say" type="submit" disabled>Speak</button></div></form>
-        </details>
-        <section class="utility"><details><summary>More controls <span>+</span></summary><div id="more-actions" class="more-actions"></div></details></section>
+        <section id="dj-booth" class="dj-booth" data-state="off" aria-labelledby="dj-name" hidden>
+          <div class="dj-top"><span class="dj-light" aria-hidden="true"></span><h3 id="dj-name">Your DJ</h3><p id="dj-state" class="dj-state" role="status">Off</p></div>
+          <div class="dj-switches">
+            <label class="dj-switch" id="dj-talk-switch"><input id="dj-talk" type="checkbox" role="switch"><span class="dj-track" aria-hidden="true"></span>Talks</label>
+            <label class="dj-switch" id="dj-pick-switch" title="Builds sets from your saved songs while offline"><input id="dj-station-enabled" type="checkbox" role="switch"><span class="dj-track" aria-hidden="true"></span>Picks music</label>
+            <label class="dj-switch" id="dj-hop-switch" title="Moves to a random Pandora station every few songs"><input id="dj-hop" type="checkbox" role="switch"><span class="dj-track" aria-hidden="true"></span>Hops stations</label>
+          </div>
+          <div id="dj-mic" class="dj-mic" hidden><blockquote id="dj-line" aria-live="polite"></blockquote><button id="dj-stop" class="dj-button" type="button" hidden>■ Stop</button></div>
+          <p id="dj-notice" class="dj-notice" hidden><span id="dj-notice-text"></span> <a id="dj-notice-link" href="#settings">Open DJ settings</a></p>
+          <details id="dj-more" class="dj-more"><summary><span id="dj-lineup-title">Up next</span></summary>
+            <p id="dj-hop-status" class="dj-empty" hidden></p>
+            <ol id="dj-queue" hidden></ol><p id="dj-lineup-empty" class="dj-empty"></p>
+            <form id="dj-theme-form" class="dj-form"><label for="dj-theme">Station theme</label><div class="dj-field"><input id="dj-theme" maxlength="450" placeholder="A varied mix from my saved music" autocomplete="off"><button class="dj-button" type="submit">Set</button></div></form>
+          </details>
+        </section>
+        <details id="audio-output-panel" class="audio-output"><summary>Audio output <span id="audio-status" role="status"></span></summary><div class="audio-output-body"><label for="audio-output">Play on</label><select id="audio-output"><option value="browser">Browser</option><option value="host">Host speakers</option><option value="both">Both</option></select><label for="browser-name">This browser</label><input id="browser-name" maxlength="80" placeholder="Name this browser" aria-label="This browser name"></div></details>
         </div>
       </div>
-    </section>
-    <section id="shortcut-legend" data-views="player" class="shortcut-legend" aria-labelledby="shortcuts-title">
-      <details><summary id="shortcuts-title">Keyboard shortcuts <span>+</span></summary>
-      <p>Use your pianobar keys anywhere outside text fields and dialogs. Faded shortcuts are unavailable right now.</p>
-      <div id="shortcut-list" class="shortcut-list"></div></details>
     </section>
     <section id="stations-page" data-views="stations" class="control-card" aria-labelledby="stations-title">
       <div class="section-heading"><h1 id="stations-title">Stations</h1></div>
@@ -71,73 +74,142 @@
       <p id="station-list-message" role="status"></p><div id="station-list"></div>
       <details class="station-management"><summary>Manage stations <span>+</span></summary><div id="station-page-actions" class="action-grid"></div></details>
     </section>
-    <section id="saved-library" data-views="library" class="saved-library control-card" aria-labelledby="saved-title"><div class="saved-heading"><div><p class="eyebrow">AVAILABLE OFFLINE</p><h3 id="saved-title">Saved songs <span id="saved-count">0</span></h3></div><button id="refresh-library" type="button">Refresh</button></div><label class="search-label" for="library-search">Search your saved music</label><input id="library-search" type="search" placeholder="Song, artist, or album…" autocomplete="off"><p id="library-message" role="status">Open Library to see your saved songs.</p><div id="saved-songs"></div></section>
+    <section id="saved-library" data-views="library" class="saved-library control-card" aria-labelledby="saved-title"><div class="saved-heading"><div><p class="eyebrow">AVAILABLE OFFLINE</p><h3 id="saved-title">Saved songs <span id="saved-count">0</span></h3></div><button id="refresh-library" type="button">Refresh</button></div><div class="library-tabs" role="tablist" aria-label="Group your library">
+        <button type="button" role="tab" id="library-tab-songs" data-group="songs" aria-selected="true">Songs</button><button type="button" role="tab" id="library-tab-artists" data-group="artists" aria-selected="false">Artists</button><button type="button" role="tab" id="library-tab-albums" data-group="albums" aria-selected="false">Albums</button><button type="button" role="tab" id="library-tab-genres" data-group="genres" aria-selected="false">Genres</button>
+      </div><label class="search-label" for="library-search">Search your saved music</label><input id="library-search" type="search" placeholder="Song, artist, album or genre…" autocomplete="off"><p id="library-message" role="status">Open Library to see your saved songs.</p><div id="saved-songs" role="tabpanel"></div></section>
+    <section id="playlists-page" data-views="playlists" class="control-card" aria-labelledby="playlists-title">
+      <div class="section-heading playlists-heading"><div><p class="eyebrow">YOUR MIXES</p><h1 id="playlists-title">Playlists</h1></div><button id="new-playlist" class="playlist-button" type="button">＋ New playlist</button></div>
+      <form id="dj-playlist-form" class="dj-playlist" hidden>
+        <label for="dj-playlist-prompt"><span id="dj-playlist-who">Ask your DJ</span> to make you one</label>
+        <textarea id="dj-playlist-prompt" rows="2" maxlength="700" placeholder="Rainy Sunday morning: mellow, acoustic, nothing too sad…" required></textarea>
+        <div class="dj-playlist-row"><label for="dj-playlist-count">Songs</label><select id="dj-playlist-count"><option>10</option><option selected>20</option><option>30</option><option>45</option><option>60</option></select><button id="dj-playlist-make" class="playlist-button primary" type="submit">Make it</button><span id="dj-playlist-status" role="status"></span></div>
+      </form>
+      <div class="playlists-layout">
+        <div id="playlist-list" class="playlist-list" aria-label="Your playlists"></div>
+        <div id="playlist-detail" class="playlist-detail" aria-live="polite">
+          <p id="playlist-empty" class="playlist-empty">Make a playlist, ask the DJ for one, or add songs from your Library with ＋.</p>
+          <div id="playlist-view" hidden>
+            <div class="playlist-head">
+              <input id="playlist-name" class="playlist-name" maxlength="80" aria-label="Playlist name" autocomplete="off">
+              <textarea id="playlist-description" class="playlist-description" rows="1" maxlength="500" placeholder="Add a description" aria-label="Playlist description"></textarea>
+              <p id="playlist-meta" class="playlist-meta"></p>
+              <div class="playlist-actions"><button id="playlist-play" class="playlist-button primary" type="button">▶ Play</button><button id="playlist-shuffle" class="playlist-button" type="button">⤨ Shuffle</button><button id="playlist-stop" class="playlist-button" type="button" hidden>■ Stop playlist</button><button id="playlist-delete" class="playlist-button danger" type="button">Delete</button></div>
+            </div>
+            <ol id="playlist-songs" class="playlist-songs"></ol>
+          </div>
+        </div>
+      </div>
+    </section>
     <section id="settings-page" data-views="settings" class="control-card" aria-labelledby="settings-title">
       <p class="eyebrow">YOUR PLAYER, YOUR WAY</p><h1 id="settings-title">Settings</h1>
       <p id="setup-message" hidden>Add your Pandora account to start listening, or choose offline startup to use a saved library.</p>
+      <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+        <button type="button" role="tab" id="settings-tab-listening" data-tab="listening" aria-controls="settings-panel-listening" aria-selected="true">Listening</button><button type="button" role="tab" id="settings-tab-pandora" data-tab="pandora" aria-controls="settings-panel-pandora" aria-selected="false">Pandora</button><button type="button" role="tab" id="settings-tab-dj" data-tab="dj" aria-controls="settings-panel-dj" aria-selected="false">DJ</button><button type="button" role="tab" id="settings-tab-connections" data-tab="connections" aria-controls="settings-panel-connections" aria-selected="false">Connections</button><button type="button" role="tab" id="settings-tab-web" data-tab="web" aria-controls="settings-panel-web" aria-selected="false">Web access</button>
+      </div>
       <form id="settings-form">
-        <fieldset><legend>This browser</legend>
-          <label class="setting-check"><input id="setting-auto-listen" type="checkbox" checked>Listen here automatically when the page opens</label>
-          <p id="auto-listen-note" class="settings-hint">Saved automatically for this browser. Applies on the next page load. Your browser may still require a click to allow sound.</p>
-        </fieldset>
-        <fieldset><legend>Android app</legend>
-          <a class="android-download" href="https://github.com/Bake-Ware/pianobar-super/releases/download/android-2026.09.10/pianobar-2026.09.10.apk">Download Android APK ↓</a>
-          <p class="settings-hint">Android 8.0 or newer. Enter your server address in the app’s Settings. Download songs from Library, then import them in the app’s Downloads to listen offline.</p>
-        </fieldset>
-        <fieldset><legend>Pandora account</legend><div class="settings-grid">
-          <label>Email<input id="setting-user" type="email" autocomplete="username" maxlength="450"></label>
-          <label>Password<input id="setting-password" type="password" autocomplete="new-password" maxlength="450" placeholder="Enter your Pandora password"></label>
-        </div><p id="account-password-note" class="settings-hint">Your password is stored in your private pianobar config file.</p>
-        <label class="setting-check"><input id="setting-clearPassword" type="checkbox">Forget saved Pandora credentials</label></fieldset>
-        <fieldset><legend>Listening &amp; offline library</legend><div class="settings-grid">
-          <label>Library folder<input id="setting-cache_dir" autocomplete="off" required></label>
-          <label>Audio quality<select id="setting-audio_quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
-          <label>Audio buffer (ms)<input id="setting-audio_buffer_ms" type="number" min="0" max="2000" required></label>
-          <label>Default audio output<select id="setting-output"><option value="host">Host</option><option value="browser">Browser</option><option value="both">Both</option></select></label>
-        </div><div class="settings-checks">
-          <label class="setting-check"><input id="setting-cache_songs" type="checkbox">Save loaded songs automatically</label>
-          <label class="setting-check"><input id="setting-offline_fallback" type="checkbox">Use saved songs when the connection fails</label>
-          <label class="setting-check"><input id="setting-offline" type="checkbox">Start in offline mode</label>
-        </div></fieldset>
-        <fieldset><legend>LLM DJ &amp; voice</legend>
-          <p class="settings-hint">The DJ chooses from your saved songs. Save settings applies voice selection immediately. Save &amp; restart player applies provider and metadata changes; enable the DJ station in Now playing.</p>
-          <div class="settings-grid">
-            <label>LLM endpoint URL<input id="setting-dj-llm_url" type="url" maxlength="450" placeholder="http://your-server:1234/v1/chat/completions"></label>
-            <label>LLM model<input id="setting-dj-model" maxlength="450" placeholder="Model advertised by your server"></label>
-            <label>LLM bearer key<input id="setting-dj-llm_key" type="password" autocomplete="new-password" maxlength="450" placeholder="Leave blank to keep saved key"></label>
-            <label>DJ personality<input id="setting-dj-style" maxlength="450"></label>
+        <div class="settings-panel" role="tabpanel" id="settings-panel-listening" aria-labelledby="settings-tab-listening">
+          <p class="settings-lead">How and where your music plays.</p>
+          <fieldset><legend>This browser</legend>
+            <label class="setting-check"><input id="setting-auto-listen" type="checkbox" checked>Listen here automatically when the page opens</label>
+            <p id="auto-listen-note" class="settings-hint">Saved for this browser only, from the next page load. Your browser may still ask for a click before it plays sound.</p>
+          </fieldset>
+          <fieldset><legend>Sound</legend><div class="settings-grid">
+            <label>Default audio output<select id="setting-output"><option value="host">Host speakers</option><option value="browser">Browser</option><option value="both">Both</option></select></label>
+            <label>Audio quality<select id="setting-audio_quality"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+            <label>Host speaker buffer (ms)<input id="setting-audio_buffer_ms" type="number" min="0" max="2000" required><small>Higher rides out hiccups on the server’s own speakers.</small></label>
+          </div><p class="settings-tag">Applies after Save &amp; restart</p></fieldset>
+          <fieldset><legend>Offline library</legend><div class="settings-grid">
+            <label>Library folder<input id="setting-cache_dir" autocomplete="off" required></label>
+          </div><div class="settings-checks">
+            <label class="setting-check"><input id="setting-cache_songs" type="checkbox">Save songs automatically as they play</label>
+            <label class="setting-check"><input id="setting-offline_fallback" type="checkbox">Switch to saved songs if the connection drops</label>
+            <label class="setting-check"><input id="setting-offline" type="checkbox">Start in offline mode</label>
+          </div><p class="settings-tag">Applies after Save &amp; restart</p></fieldset>
+          <fieldset><legend>Android app</legend>
+            <p class="settings-hint">Android 8.0 or newer. Enter this server’s address in the app’s Settings. To listen offline, download songs from Library and import them in the app’s Downloads.</p>
+            <a class="android-download" href="https://github.com/Bake-Ware/pianobar-super/releases/download/android-2026.09.10/pianobar-2026.09.10.apk">Download Android APK ↓</a>
+          </fieldset>
+        </div>
+        <div class="settings-panel" role="tabpanel" id="settings-panel-pandora" aria-labelledby="settings-tab-pandora" hidden>
+          <p class="settings-lead">Your Pandora sign-in. It is kept in your private pianobar config file on the server.</p>
+          <fieldset><legend>Account</legend><div class="settings-grid">
+            <label>Email<input id="setting-user" type="email" autocomplete="username" maxlength="450"></label>
+            <label>Password<input id="setting-password" type="password" autocomplete="new-password" maxlength="450" placeholder="Enter your Pandora password"></label>
+          </div><p id="account-password-note" class="settings-hint">Your password is stored in your private pianobar config file.</p>
+          <div class="settings-checks"><label class="setting-check"><input id="setting-clearPassword" type="checkbox">Forget saved Pandora credentials</label></div>
+          <p class="settings-tag">Applies after Save &amp; restart</p></fieldset>
+        </div>
+        <div class="settings-panel" role="tabpanel" id="settings-panel-dj" aria-labelledby="settings-tab-dj" hidden>
+          <p class="settings-lead">Your DJ’s on-air personality. Turn the DJ on from the booth in Now playing. Everything on this tab applies as soon as you save.</p>
+          <fieldset><legend>Personality</legend><div class="settings-grid">
             <label>DJ name<input id="setting-dj-dj_name" maxlength="100" placeholder="Your DJ’s on-air name"></label>
             <label>Your name<input id="setting-dj-listener_name" maxlength="100" autocomplete="given-name" placeholder="How the DJ should address you"></label>
-            <label>Default station theme<input id="setting-dj-theme" maxlength="450"></label>
-            <label>DJ set size<select id="setting-dj-set_mode"><option value="songs">Number of songs</option><option value="minutes">Minutes of music</option></select></label>
-            <label>Songs per set<input id="setting-dj-set_songs" type="number" min="1" max="30" value="1"></label>
-            <label>Target minutes per set<input id="setting-dj-set_minutes" type="number" min="1" max="120" value="15"></label>
-            <label>Voice endpoint URL<input id="setting-dj-tts_url" type="url" maxlength="450" placeholder="https://your-voice-server/api/voice"></label>
+            <label class="settings-wide">Personality<input id="setting-dj-style" maxlength="450" placeholder="A warm, playful radio DJ"></label>
+          </div></fieldset>
+          <fieldset><legend>Talking</legend><div class="settings-grid">
             <label>Voice<select id="setting-dj-voice"><option value="">Use the voice server’s default</option></select></label>
-            <label>Voice bearer key<input id="setting-dj-tts_key" type="password" autocomplete="new-password" maxlength="450" placeholder="Leave blank to keep saved key"></label>
-            <label>Voice HTTPS certificate file<input id="setting-dj-tts_ca" maxlength="450" placeholder="Optional absolute path on this server"></label>
+            <div class="settings-buttons settings-inline"><button id="sample-dj-voice" type="button">Sample voice</button><button id="refresh-dj-voices" type="button">Refresh voices</button></div>
           </div>
-          <div class="settings-checks"><label class="setting-check"><input id="setting-dj-play_over_music" type="checkbox" checked>Play DJ intros over music</label></div>
-          <p class="settings-hint">The DJ only chooses music and prepares introductions while a browser is playing music. Names apply when saved. One introduction summarizes each set. Timed sets use whole songs and aim for the requested duration, up to 30 songs. Uncheck Play DJ intros over music to reserve airtime before the music resumes. Airtime pauses the shared player. Set sizing applies to the next selection when saved; intro playback applies immediately.</p>
-          <div class="settings-buttons"><button id="sample-dj-voice" type="button">Sample voice</button><button id="refresh-dj-voices" type="button">Refresh voices</button></div>
-          <p id="voice-sample-status" class="settings-hint" role="status">Preview the selected voice using the active voice server, before saving.</p>
-          <p id="dj-voices-status" class="settings-hint" role="status">Voices come from the active voice server. Save &amp; restart player after changing the endpoint.</p>
+          <p id="voice-sample-status" class="settings-hint" role="status">Preview the selected voice before saving.</p>
+          <p id="dj-voices-status" class="settings-hint" role="status">Voices come from the voice server under Connections.</p>
+          <div class="settings-checks"><label class="setting-check"><input id="setting-dj-play_over_music" type="checkbox" checked>Talk over the music</label></div>
+          <p class="settings-hint">The music dips while the DJ speaks. Turn this off to pause the music for the DJ instead; the song picks up where it left off.</p>
+          <div class="dj-try">
+            <p class="settings-subhead">Try your DJ</p>
+            <p class="settings-hint">On the song that is playing. Lines play through the player, so everyone listening hears them.</p>
+            <div class="dj-try-row"><input id="dj-text" maxlength="700" placeholder="Give the DJ a line…" aria-label="Give the DJ a line" autocomplete="off"><button id="dj-say" type="button">Speak</button><button id="dj-introduce" type="button">Introduce this song</button></div>
+          </div></fieldset>
+          <fieldset><legend>Picking music</legend>
+            <p class="settings-hint">When “Picks music” is on, the DJ builds sets from your saved songs and introduces each set once.</p>
+            <div class="settings-grid">
+            <label class="settings-wide">Default station theme<input id="setting-dj-theme" maxlength="450"></label>
+            <label>Set size<select id="setting-dj-set_mode"><option value="songs">Number of songs</option><option value="minutes">Minutes of music</option></select></label>
+            <label id="set-songs-field">Songs per set<input id="setting-dj-set_songs" type="number" min="1" max="30" value="1"></label>
+            <label id="set-minutes-field">Minutes per set<input id="setting-dj-set_minutes" type="number" min="1" max="120" value="15"></label>
+          </div></fieldset>
+          <fieldset><legend>Station hopping</legend><div class="settings-grid">
+            <label>Songs per station<input id="setting-dj-hop_songs" type="number" min="1" max="20" value="4"><small>When “Hops stations” is on, the DJ moves to a random station after this many songs.</small></label>
+          </div></fieldset>
+        </div>
+        <div class="settings-panel" role="tabpanel" id="settings-panel-connections" aria-labelledby="settings-tab-connections" hidden>
+          <p class="settings-lead">The servers the DJ uses to write and to speak. Keys stay on this server and are never shown again after saving.</p>
+          <fieldset><legend>Language model</legend><div class="settings-grid">
+            <label class="settings-wide">Endpoint URL<input id="setting-dj-llm_url" type="url" maxlength="450" placeholder="http://your-server:1234/v1/chat/completions"></label>
+            <label>Model<input id="setting-dj-model" maxlength="450" placeholder="Model advertised by your server"></label>
+            <label>Bearer key<input id="setting-dj-llm_key" type="password" autocomplete="new-password" maxlength="450" placeholder="Leave blank to keep saved key"></label>
+          </div><div class="settings-checks"><label class="setting-check"><input id="setting-dj-clear_llm_key" type="checkbox">Forget saved LLM key</label></div></fieldset>
+          <fieldset><legend>Voice</legend><div class="settings-grid">
+            <label class="settings-wide">Endpoint URL<input id="setting-dj-tts_url" type="url" maxlength="450" placeholder="https://your-voice-server/api/voice"></label>
+            <label>Bearer key<input id="setting-dj-tts_key" type="password" autocomplete="new-password" maxlength="450" placeholder="Leave blank to keep saved key"></label>
+            <label>HTTPS certificate file<input id="setting-dj-tts_ca" maxlength="450" placeholder="Optional absolute path on this server"></label>
+          </div><div class="settings-checks"><label class="setting-check"><input id="setting-dj-clear_tts_key" type="checkbox">Forget saved voice key</label></div></fieldset>
+          <fieldset><legend>Song details</legend><div class="settings-checks">
+            <label class="setting-check"><input id="setting-dj-metadata_network" type="checkbox" checked>Look up missing artwork, genres and release dates on MusicBrainz and the Cover Art Archive</label>
+          </div></fieldset>
           <p id="dj-key-note" class="settings-hint"></p>
-          <div class="settings-checks"><label class="setting-check"><input id="setting-dj-clear_llm_key" type="checkbox">Forget saved LLM key</label><label class="setting-check"><input id="setting-dj-clear_tts_key" type="checkbox">Forget saved voice key</label><label class="setting-check"><input id="setting-dj-metadata_network" type="checkbox" checked>Fetch missing artwork and metadata from MusicBrainz and Cover Art Archive</label></div>
           <p id="dj-environment-note" class="settings-hint" hidden></p>
-        </fieldset>
-        <fieldset><legend>Web access</legend><p class="settings-hint">Use 127.0.0.1 for this computer or 0.0.0.0 for your network. Network login uses the username <b>pianobar</b>.</p><div class="settings-grid">
-          <label>Listen address<input id="setting-listen" autocomplete="off" required></label>
-          <label>Port<input id="setting-port" type="number" min="1" max="65535" required></label>
-          <label>Web access password<input id="setting-web-password" type="password" autocomplete="new-password" maxlength="450"></label>
-        </div><p id="web-password-note" class="settings-hint"></p><p class="settings-hint">Web address and password changes take effect after restarting pianobar. Network access uses HTTP; use it on a trusted network.</p></fieldset>
-        <div class="settings-buttons"><button id="save-settings" type="submit" value="save">Save settings</button><button id="apply-settings" type="submit" value="apply">Save &amp; restart player</button></div>
-        <p id="settings-status" role="status">Voice, set sizing and intro playback apply on save. Other player changes require a restart, which interrupts playback.</p>
+          <p class="settings-tag">Applies after Save &amp; restart</p>
+        </div>
+        <div class="settings-panel" role="tabpanel" id="settings-panel-web" aria-labelledby="settings-tab-web" hidden>
+          <p class="settings-lead">How browsers reach this player. Use 127.0.0.1 for this computer only, or 0.0.0.0 for your network. Network sign-in uses the username <b>pianobar</b>.</p>
+          <fieldset><legend>Address &amp; sign-in</legend><div class="settings-grid">
+            <label>Listen address<input id="setting-listen" autocomplete="off" required></label>
+            <label>Port<input id="setting-port" type="number" min="1" max="65535" required></label>
+            <label>Web access password<input id="setting-web-password" type="password" autocomplete="new-password" maxlength="450"></label>
+          </div><p id="web-password-note" class="settings-hint"></p>
+          <p class="settings-hint">Network access uses plain HTTP, so use it on a trusted network.</p>
+          <p class="settings-tag">Applies after restarting pianobar</p></fieldset>
+        </div>
+        <div class="settings-actions">
+          <p id="settings-status" role="status">DJ settings apply on save. Others need a restart, which briefly interrupts playback.</p>
+          <div class="settings-buttons"><button id="save-settings" type="submit" value="save">Save</button><button id="apply-settings" type="submit" value="apply">Save &amp; restart player</button></div>
+        </div>
       </form>
     </section>
     <footer><span id="cache-note">Songs save automatically when loaded.</span><span>Good music. Your pace.</span></footer>
   </main>
   <div id="notice" role="status" hidden></div>
+  <dialog id="playlist-picker" aria-labelledby="playlist-picker-title"><form method="dialog" class="playlist-picker"><h2 id="playlist-picker-title">Add to playlist</h2><p id="playlist-picker-song" class="playlist-meta"></p><div id="playlist-picker-list" class="playlist-picker-list"></div><div class="playlist-picker-new"><input id="playlist-picker-name" maxlength="80" placeholder="New playlist name" aria-label="New playlist name" autocomplete="off"><button id="playlist-picker-create" class="playlist-button primary" type="button">Create</button></div><button class="playlist-button" value="cancel">Cancel</button></form></dialog>
   <dialog id="prompt-dialog" aria-labelledby="prompt-title"><div class="dialog-heading"><div><p class="eyebrow">KEEP THE MUSIC PERSONAL</p><h2 id="prompt-title">One more thing…</h2></div><span class="prompt-badge">PLAYER REQUEST</span></div><p class="dialog-hint">Choose an option or type your answer below.</p><p id="delete-confirmation" hidden></p><pre id="prompt-output"></pre><div id="prompt-options"></div><form id="prompt-form"><label for="answer" id="answer-label">Your answer</label><div class="answer-row"><input id="answer" autocomplete="off" spellcheck="false"><button class="submit-button" type="submit">Continue ↗</button></div></form><p class="dialog-footnote">All station, discovery, and account actions are available here.</p></dialog>
 </body>
 </html>

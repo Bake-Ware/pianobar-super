@@ -85,7 +85,7 @@ void BarWebPoll (BarApp_t *app) {
 	if (len >= (ssize_t) sizeof (buffer)) { BarWebHandled (); return; }
 	if (len <= 0) { return; }
 	buffer[len] = '\0';
-	bool accepted = false;
+	bool accepted = false, ack = true;
 	json_object *message = json_tokener_parse (buffer), *type, *id;
 	if (message != NULL && json_object_object_get_ex (message, "type", &type) &&
 			json_object_is_type (type, json_type_string) &&
@@ -100,6 +100,36 @@ void BarWebPoll (BarApp_t *app) {
 				app->player.outputMode = mode;
 				pthread_mutex_unlock (&app->player.lock);
 				BarWebState (app);
+			}
+		} else if (strcmp (json_object_get_string (type), "dj_voice") == 0) {
+			/* The web server owns the clip file; nothing awaits a reply. */
+			json_object *voice, *overMusic;
+			ack = false;
+			if (json_object_object_get_ex (message, "voice", &voice) &&
+					json_object_is_type (voice, json_type_int) &&
+					json_object_object_get_ex (message, "overMusic", &overMusic) &&
+					json_object_is_type (overMusic, json_type_boolean)) {
+				BarPlayerLoadVoice (&app->player, json_object_get_string (id),
+						json_object_get_int (voice), json_object_get_boolean (overMusic));
+				BarWebState (app);
+			}
+		} else if (strcmp (json_object_get_string (type), "dj_voice_stop") == 0) {
+			ack = false;
+			BarPlayerStopVoice (&app->player);
+			BarWebState (app);
+		} else if (strcmp (json_object_get_string (type), "queue_station") == 0) {
+			/* Switch after the current song instead of skipping it. */
+			PianoStation_t *station = PianoFindStationById (app->ph.stations,
+					json_object_get_string (id));
+			if (!app->offline && !app->doQuit && app->modeRequest == 0 && station != NULL) {
+				app->nextStation = station;
+				if (app->playlist != NULL) {
+					PianoDestroyPlaylist (PianoListNextP (app->playlist));
+					app->playlist->head.next = NULL;
+				}
+				BarWebState (app);
+			} else {
+				BarUiMsg (&app->settings, MSG_ERR, "That station is unavailable.\n");
 			}
 		} else if (strcmp (json_object_get_string (type), "select_station") == 0) {
 			PianoStation_t *station = PianoFindStationById (app->ph.stations,
@@ -153,7 +183,7 @@ void BarWebPoll (BarApp_t *app) {
 		}
 	}
 	if (message != NULL) { json_object_put (message); }
-	if (!accepted) { BarWebHandled (); }
+	if (!accepted && ack) { BarWebHandled (); }
 }
 
 int BarWebListSaved (const char *directory) {
@@ -192,6 +222,8 @@ void BarWebState (const BarApp_t *app) {
 	json_object_object_add (object, "mode", json_object_new_int (player->mode));
 	json_object_object_add (object, "elapsed", json_object_new_int64 (player->songPlayed));
 	json_object_object_add (object, "duration", json_object_new_int64 (player->songDuration));
+	json_object_object_add (object, "djVoice", json_object_new_int64 (player->voice != NULL ? player->voiceId : 0));
+	json_object_object_add (object, "djVoiceDone", json_object_new_int64 (player->voiceDoneId));
 	pthread_mutex_unlock (&player->lock);
 	string (object, "station", app->curStation == NULL ? NULL : app->curStation->name);
 	string (object, "stationId", app->curStation == NULL ? NULL : app->curStation->id);
@@ -222,6 +254,12 @@ void BarWebState (const BarApp_t *app) {
 		if (name != NULL) { json_object_array_add (queuedIds, json_object_new_string (name + 1)); }
 	}
 	json_object_object_add (object, "queuedSavedIds", queuedIds);
+	/* The next song in the playlist, online or offline, so the DJ can write
+	 * and voice its introduction before it starts. */
+	const PianoSong_t *upcoming = song == NULL ? NULL : PianoListNextP (song);
+	string (object, "nextTitle", upcoming == NULL ? NULL : upcoming->title);
+	string (object, "nextArtist", upcoming == NULL ? NULL : upcoming->artist);
+	string (object, "nextAlbum", upcoming == NULL ? NULL : upcoming->album);
 	string (object, "title", song == NULL ? NULL : song->title);
 	string (object, "artist", song == NULL ? NULL : song->artist);
 	string (object, "album", song == NULL ? NULL : song->album);

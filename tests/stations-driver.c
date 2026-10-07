@@ -22,9 +22,9 @@ static json_object *receive (int fd) {
 	return object;
 }
 
-static void selectStation (BarApp_t *app, int fd, const char *id) {
+static void stationCommand (BarApp_t *app, int fd, const char *type, const char *id) {
 	char message[256];
-	int len = snprintf (message, sizeof (message), "{\"type\":\"select_station\",\"id\":\"%s\"}", id);
+	int len = snprintf (message, sizeof (message), "{\"type\":\"%s\",\"id\":\"%s\"}", type, id);
 	assert (send (fd, message, len, 0) == len);
 	BarWebPoll (app);
 	json_object *reply;
@@ -34,6 +34,10 @@ static void selectStation (BarApp_t *app, int fd, const char *id) {
 		json_object_put (reply);
 		if (handled) { break; }
 	} while (true);
+}
+
+static void selectStation (BarApp_t *app, int fd, const char *id) {
+	stationCommand (app, fd, "select_station", id);
 }
 
 int main (void) {
@@ -95,6 +99,17 @@ int main (void) {
 	selectStation (&app, pair[1], "202");
 	assert (app.nextStation == &first && !app.player.doQuit);
 	app.settings.keys[BAR_KS_SELECTSTATION] = 's';
+	/* The DJ's station hop queues the next station without cutting the song. */
+	stationCommand (&app, pair[1], "queue_station", "missing");
+	assert (app.nextStation == &first && app.playlist->head.next == &queued->head);
+	app.offline = true;
+	stationCommand (&app, pair[1], "queue_station", "202");
+	assert (app.nextStation == &first && app.playlist->head.next == &queued->head);
+	app.offline = false;
+	stationCommand (&app, pair[1], "queue_station", "202");
+	assert (app.nextStation == &second && app.curStation == &first);
+	assert (app.playlist->head.next == NULL && !app.player.doQuit && app.player.doPause);
+	app.nextStation = &first;
 	selectStation (&app, pair[1], "202");
 	assert (app.nextStation == &second && app.curStation == &first);
 	assert (app.playlist != NULL && app.playlist->head.next == NULL);

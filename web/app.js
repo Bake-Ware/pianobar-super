@@ -26,7 +26,7 @@ if (shell) {
     try { window.chrome.webview.postMessage({type: 'widget'}); } catch (_) { }
   });
 }
-const views = {player: 'Now playing', stations: 'Stations', library: 'Library', settings: 'Settings'};
+const views = {player: 'Now playing', stations: 'Stations', playlists: 'Playlists', library: 'Library', settings: 'Settings'};
 let voiceSampleController = null, voiceSampleAudio = null, voiceSampleURL = null;
 $('sidebar-tools-toggle').addEventListener('click', () => {
   const open = document.querySelector('.sidebar').classList.toggle('tools-open');
@@ -48,6 +48,7 @@ function showView(view, focus = false) {
     else link.removeAttribute('aria-current');
   });
   if (view === 'library') queueMicrotask(refreshLibrary);
+  if (view === 'playlists') queueMicrotask(() => { refreshLibrary(); loadPlaylists(); });
   if (view === 'settings') queueMicrotask(loadSettings);
   requestAnimationFrame(followTranscript);
   if (focus) {
@@ -65,6 +66,10 @@ showView(location.hash.slice(1));
 let snapshot = {state: {}, prompt: {}}, revision = -1, renderedActions = '', promptId = -1;
 let sending = false, noticeTimer;
 let savedSongs = [], libraryBusy = false, libraryRenderKey = '', libraryDirectory = '';
+let playlists = [], playlistRun = null, playlistSelected = null, playlistsLoaded = false, playlistRenderKey = '';
+let playlistDeleteArmed = null;
+try { playlistSelected = localStorage.getItem('pianobarPlaylist'); } catch (_) {}
+const playlistArtwork = new Map();
 let stationRenderKey = '';
 let audioContext, audioController, audioNextTime = 0, audioEpoch = null, desiredOutput = null;
 let browserId = null, browserRegistration, browserDesired = false, browserStatus = 'idle';
@@ -93,10 +98,9 @@ window.addEventListener('storage', event => {
   }
 });
 let coverSource = '', coverAttempt = 0, coverRetry, coverCandidates = [], coverCandidate = 0;
-let djEnabled = false, djSpeaking = false, djInfo = {}, djTrack = '', djGeneratedTrack = '';
-let djAnnouncement = 0, djGeneration = 0, djController, djAudio, djObjectURL, djUtterance;
-let djAirtimeToken = null, djAirtimePending = false, djAirtimeSong = null, djAirtimeReleasing = false;
-let audioBufferSeconds = .9;
+let djBusy = false;
+// Audio crosses tunnels and Wi-Fi; a deeper cushion rides out their stalls.
+let audioBufferSeconds = 1.5;
 const audioStats = {underruns: 0, resyncs: 0};
 let settingsLoaded = false, settingsBusy = false, setupShown = false;
 const audioSources = new Set();
@@ -138,15 +142,13 @@ async function pollBrowser() {
   try {
     await registerBrowser();
     const page = await browserRequest('heartbeat', {id: browserId, status: browserPlaybackStatus(),
-      ready: audioContext?.state === 'running' || djHasAirtime()});
+      ready: audioContext?.state === 'running', ...audioStats});
     browserLastSeen = performance.now();
     if (mutation !== browserMutation) return;
     browserDesired = page.enabled;
     browserVolume = page.volume;
     if (document.activeElement !== $('browser-name')) $('browser-name').value = page.name;
-    if (audioGain) audioGain.gain.value = browserVolume * (djSpeaking ? .2 : 1);
-    if (djAudio) djAudio.volume = browserVolume;
-    if (!browserDesired || browserVolume === 0) stopDJ();
+    if (audioGain) audioGain.gain.value = browserVolume;
     if (autoListenPending && revision >= 0 && ['host', 'browser', 'both'].includes(snapshot.state.output) &&
         !snapshot.playerStopped && !snapshot.setupRequired &&
         !snapshot.restarting && !snapshot.exited && !snapshot.pending && !snapshot.prompt.active && !sending) {
@@ -197,104 +199,241 @@ const labels = {
 };
 const stationActions = ['act_stationchange', 'act_stationcreate', 'act_stationaddmusic', 'act_stationaddbygenre', 'act_managestation', 'act_stationrename', 'act_addshared', 'act_stationcreatefromsong', 'act_stationselectquickmix', 'act_stationdelete'];
 const libraryActions = ['act_upcoming', 'act_history', 'act_songinfo', 'act_bookmark', 'act_songexplain', 'act_offline'];
-async function refreshLibrary() {
+// Background polls are silent and only re-render when the library changed;
+// the Refresh button shows activity only when it was pressed.
+let libraryText = '';
+async function refreshLibrary(manual = false) {
   if (libraryBusy) return;
   libraryBusy = true;
-  $('refresh-library').disabled = true;
+  if (manual) $('refresh-library').disabled = true;
   try {
     const response = await fetch('/api/library');
-    const result = await response.json();
+    const text = await response.text();
+    const result = JSON.parse(text);
     if (!response.ok) throw new Error(result.error || 'Could not read your saved songs.');
-    savedSongs = result.songs;
-    libraryRenderKey = '';
-    renderLibrary();
+    if (text !== libraryText || manual) {
+      libraryText = text;
+      savedSongs = result.songs;
+      libraryRenderKey = '';
+      renderLibrary();
+    }
   } catch (error) {
-    $('library-message').textContent = error.message;
+    if (manual || !savedSongs.length) $('library-message').textContent = error.message;
   } finally {
     libraryBusy = false;
-    $('refresh-library').disabled = false;
+    if (manual) $('refresh-library').disabled = false;
   }
 }
-function renderLibrary() {
-  const query = $('library-search').value.trim().toLocaleLowerCase();
-  const currentId = snapshot.state.savedId || '';
-  const key = JSON.stringify([savedSongs, query, currentId]);
-  if (key === libraryRenderKey) return;
-  libraryRenderKey = key;
-  const filtered = savedSongs.filter(song =>
-    [song.title, song.artist, song.album].some(value => value.toLocaleLowerCase().includes(query)));
-  $('saved-count').textContent = savedSongs.length;
-  $('library-message').textContent = !savedSongs.length ?
-    'No saved songs yet. Songs appear here when their background downloads finish.' :
-    (!filtered.length ? 'No songs match your search.' :
-      `${filtered.length} ${filtered.length === 1 ? 'song' : 'songs'} · Choose Play to listen locally.`);
-  const rows = filtered.map(song => {
-    const row = document.createElement('div');
-    row.className = 'saved-song' + (song.id === currentId ? ' current' : '');
-    const info = document.createElement('div');
-    info.className = 'saved-song-info';
-    const title = document.createElement('p');
-    title.className = 'saved-song-title';
-    title.textContent = song.title || 'Untitled song';
-    const detail = document.createElement('p');
-    detail.className = 'saved-song-detail';
-    detail.textContent = [song.artist || 'Unknown artist', song.album,
-      song.id === currentId ? 'Now playing' : ''].filter(Boolean).join(' · ');
-    info.append(title, detail);
-    const duration = document.createElement('span');
-    duration.className = 'saved-song-duration';
-    duration.textContent = time(song.duration);
+// Library rows and groups are kept and reused between renders, so covers and
+// open groups stay put while the server reports new saves.
+let libraryGroup = 'songs', libraryQueue = null;
+try { libraryGroup = localStorage.getItem('pianobarLibraryGroup') || 'songs'; } catch (_) {}
+const libraryRows = new Map(), libraryGroups = new Map();
+const songLabel = song => song.title || 'Untitled song';
+function libraryArtwork(song) {
+  const artwork = document.createElement('span');
+  artwork.className = 'saved-artwork';
+  artwork.setAttribute('aria-hidden', 'true');
+  artwork.textContent = '♫';
+  if (/^\/api\/artwork\/[0-9a-f]{64}$/.test(song.cover || '')) {
+    const image = document.createElement('img');
+    image.alt = '';
+    image.loading = 'lazy';
+    image.decoding = 'async';
+    image.src = song.cover;
+    let attempts = 0;
+    // A lazy image only loads once laid out, so it is faded in rather than hidden.
+    image.addEventListener('load', () => image.classList.add('loaded'));
+    image.addEventListener('error', () => {
+      image.classList.remove('loaded');
+      if (attempts >= 3) return;
+      const attempt = ++attempts;
+      setTimeout(() => { if (image.isConnected) image.src = song.cover + '?retry=' + attempt; }, 1000 * 2 ** attempt);
+    });
+    artwork.append(image);
+  }
+  return artwork;
+}
+function libraryRow(song, scope) {
+  const key = scope + '\u0000' + song.id;
+  const signature = JSON.stringify([song.title, song.artist, song.album, song.duration, song.cover]);
+  const cached = libraryRows.get(key);
+  if (cached && cached.signature === signature) return cached.row;
+  const row = document.createElement('div');
+  row.className = 'saved-song';
+  row.dataset.songId = song.id;
+  const info = document.createElement('div');
+  info.className = 'saved-song-info';
+  const title = document.createElement('p');
+  title.className = 'saved-song-title';
+  title.textContent = songLabel(song);
+  const detail = document.createElement('p');
+  detail.className = 'saved-song-detail';
+  info.append(title, detail);
+  const duration = document.createElement('span');
+  duration.className = 'saved-song-duration';
+  duration.textContent = time(song.duration);
+  const play = document.createElement('button');
+  play.type = 'button';
+  play.className = 'saved-play';
+  play.textContent = '▶ Play';
+  play.setAttribute('aria-label', 'Play ' + songLabel(song));
+  play.addEventListener('click', () => command({playSaved: song.id}));
+  const download = document.createElement('a');
+  download.className = 'saved-download';
+  download.textContent = '↓ Download';
+  download.href = '/api/download/' + encodeURIComponent(song.id);
+  download.setAttribute('download', '');
+  download.setAttribute('aria-label', 'Download ' + songLabel(song));
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.className = 'saved-add';
+  add.textContent = '＋';
+  add.title = 'Add to playlist';
+  add.setAttribute('aria-label', 'Add ' + songLabel(song) + ' to a playlist');
+  add.addEventListener('click', () => openPlaylistPicker([song.id], songLabel(song) + (song.artist ? ' · ' + song.artist : '')));
+  const actions = document.createElement('div');
+  actions.className = 'saved-song-actions';
+  actions.append(play, add, download);
+  row.append(libraryArtwork(song), info, duration, actions);
+  libraryRows.set(key, {signature, row, detail, song});
+  return row;
+}
+function libraryGroupsFor(songs) {
+  const groups = new Map();
+  const add = (key, name, detail, song) => {
+    if (!groups.has(key)) groups.set(key, {key, name, detail, songs: []});
+    groups.get(key).songs.push(song);
+  };
+  for (const song of songs) {
+    if (libraryGroup === 'artists') add(song.artist || '', song.artist || 'Unknown artist', '', song);
+    else if (libraryGroup === 'albums') add((song.album || '') + '\u0000' + (song.artist || ''), song.album || 'Unknown album', song.artist || 'Unknown artist', song);
+    else if (song.genres?.length) song.genres.forEach(genre => add(genre.toLocaleLowerCase(), genre, '', song));
+    else add('\u0000none', 'No genre yet', 'Genres come from MusicBrainz after a song plays', song);
+  }
+  return [...groups.values()].sort((a, b) => (a.key.startsWith('\u0000') - b.key.startsWith('\u0000')) ||
+    a.name.localeCompare(b.name, undefined, {sensitivity: 'base'}));
+}
+function libraryGroupElement(group) {
+  const key = libraryGroup + '\u0000' + group.key;
+  let cached = libraryGroups.get(key);
+  if (!cached) {
+    const details = document.createElement('details');
+    details.className = 'library-group';
+    const summary = document.createElement('summary');
+    const artwork = document.createElement('span');
+    const info = document.createElement('span');
+    info.className = 'library-group-info';
+    const name = document.createElement('strong');
+    const detail = document.createElement('small');
+    info.append(name, detail);
     const play = document.createElement('button');
     play.type = 'button';
     play.className = 'saved-play';
     play.textContent = '▶ Play';
-    play.setAttribute('aria-label', 'Play ' + (song.title || 'Untitled song'));
-    play.addEventListener('click', () => command({playSaved: song.id}));
-    const download = document.createElement('a');
-    download.className = 'saved-download';
-    download.textContent = '↓ Download';
-    download.href = '/api/download/' + encodeURIComponent(song.id);
-    download.setAttribute('download', '');
-    download.setAttribute('aria-label', 'Download ' + (song.title || 'Untitled song'));
-    const actions = document.createElement('div');
-    actions.className = 'saved-song-actions';
-    actions.append(play, download);
-    const artwork = document.createElement('span');
-    artwork.className = 'saved-artwork';
-    artwork.setAttribute('aria-hidden', 'true');
-    artwork.textContent = '♫';
-    if (/^\/api\/artwork\/[0-9a-f]{64}$/.test(song.cover || '')) {
-      const image = document.createElement('img');
-      image.alt = '';
-      image.loading = 'lazy';
-      image.decoding = 'async';
-      image.src = song.cover;
-      let attempts = 0;
-      image.addEventListener('load', () => { image.hidden = false; });
-      image.addEventListener('error', () => {
-        image.hidden = true;
-        if (attempts >= 3) return;
-        const attempt = ++attempts;
-        setTimeout(() => {
-          if (image.isConnected) {
-            image.hidden = false;
-            image.src = song.cover + '?retry=' + attempt;
-          }
-        }, 1000 * 2 ** attempt);
-      });
-      artwork.append(image);
-    }
-    row.append(artwork, info, duration, actions);
-    return row;
-  });
-  $('saved-songs').replaceChildren(...rows);
+    play.addEventListener('click', event => {
+      event.preventDefault();
+      playSongs(cached.songs.map(song => song.id));
+    });
+    summary.append(artwork, info, play);
+    const list = document.createElement('div');
+    list.className = 'library-group-songs';
+    details.append(summary, list);
+    cached = {details, summary, artwork, name, detail, play, list, songs: [], art: ''};
+    libraryGroups.set(key, cached);
+  }
+  cached.songs = group.songs;
+  cached.name.textContent = group.name;
+  const seconds = group.songs.reduce((total, song) => total + (song.duration || 0), 0);
+  cached.detail.textContent = [group.detail, `${group.songs.length} ${group.songs.length === 1 ? 'song' : 'songs'}`, seconds ? time(seconds) : '']
+    .filter(Boolean).join(' · ');
+  cached.play.setAttribute('aria-label', 'Play ' + group.name);
+  const cover = group.songs.find(song => /^\/api\/artwork\/[0-9a-f]{64}$/.test(song.cover || ''));
+  if (cached.art !== (cover?.cover || '')) {
+    cached.art = cover?.cover || '';
+    cached.artwork.replaceWith(cached.artwork = libraryArtwork(cover || {}));
+  }
+  // Songs render only while a group is open; long libraries stay light.
+  if (cached.details.open) {
+    const songs = [...group.songs].sort((a, b) => libraryGroup === 'albums' ? 0 : songLabel(a).localeCompare(songLabel(b)));
+    const rows = songs.map(song => libraryRow(song, key));
+    if (rows.length !== cached.list.children.length || rows.some((row, index) => cached.list.children[index] !== row)) cached.list.replaceChildren(...rows);
+  }
+  if (!cached.toggleBound) {
+    cached.toggleBound = true;
+    cached.details.addEventListener('toggle', () => { libraryRenderKey = ''; renderLibrary(); });
+  }
+  return cached.details;
+}
+async function playSongs(ids) {
+  if (!ids.length || !await command({playSaved: ids[0]})) return;
+  // Queue the rest once the first song is playing (the player holds up to 30).
+  libraryQueue = ids.length > 1 ? {first: ids[0], rest: ids.slice(1, 31)} : null;
+}
+function continueLibraryQueue() {
+  const state = snapshot.state;
+  if (!libraryQueue || state.savedId !== libraryQueue.first || snapshot.pending || sending) return;
+  const queue = libraryQueue;
+  libraryQueue = null;
+  command({queueSaved: queue.rest, expectedSongKey: state.songKey});
+}
+function renderLibrary() {
+  continueLibraryQueue();
+  renderPlaylists();
+  const query = $('library-search').value.trim().toLocaleLowerCase();
+  const currentId = snapshot.state.savedId || '';
+  const key = JSON.stringify([savedSongs, query, currentId, libraryGroup]);
+  if (key === libraryRenderKey) return;
+  libraryRenderKey = key;
+  document.querySelectorAll('.library-tabs [role="tab"]').forEach(tab =>
+    tab.setAttribute('aria-selected', String(tab.dataset.group === libraryGroup)));
+  $('saved-songs').setAttribute('aria-labelledby', 'library-tab-' + libraryGroup);
+  const filtered = savedSongs.filter(song =>
+    [song.title, song.artist, song.album, ...(song.genres || [])].some(value => (value || '').toLocaleLowerCase().includes(query)));
+  $('saved-count').textContent = savedSongs.length;
+  const present = new Set(savedSongs.map(song => song.id));
+  for (const [rowKey, cached] of libraryRows) if (!present.has(cached.song.id)) libraryRows.delete(rowKey);
+  let children;
+  if (libraryGroup === 'songs') {
+    children = filtered.map(song => libraryRow(song, 'songs'));
+    $('library-message').textContent = !savedSongs.length ?
+      'No saved songs yet. Songs appear here when their background downloads finish.' :
+      (!filtered.length ? 'No songs match your search.' : `${filtered.length} ${filtered.length === 1 ? 'song' : 'songs'} · Choose Play to listen locally.`);
+  } else {
+    const groups = libraryGroupsFor(filtered);
+    children = groups.map(libraryGroupElement);
+    const noun = {artists: ['artist', 'artists'], albums: ['album', 'albums'], genres: ['genre', 'genres']}[libraryGroup];
+    $('library-message').textContent = !savedSongs.length ?
+      'No saved songs yet. Songs appear here when their background downloads finish.' :
+      (!groups.length ? 'Nothing matches your search.' : `${groups.length} ${noun[groups.length === 1 ? 0 : 1]} · Open one to see its songs, or play them all.`);
+  }
+  if (children.length !== $('saved-songs').children.length || children.some((child, index) => $('saved-songs').children[index] !== child)) {
+    $('saved-songs').replaceChildren(...children);
+  }
+  // Only the parts that change on every song are updated in place.
+  for (const {row, detail, song} of libraryRows.values()) {
+    const current = song.id === currentId;
+    row.classList.toggle('current', current);
+    detail.textContent = [song.artist || 'Unknown artist', song.album, current ? 'Now playing' : ''].filter(Boolean).join(' · ');
+  }
+  for (const cached of libraryGroups.values()) cached.details.classList.toggle('current', cached.songs.some(song => song.id === currentId));
   updateDisabled();
 }
-$('refresh-library').addEventListener('click', refreshLibrary);
+document.querySelectorAll('.library-tabs [role="tab"]').forEach(tab => tab.addEventListener('click', () => {
+  libraryGroup = tab.dataset.group;
+  try { localStorage.setItem('pianobarLibraryGroup', libraryGroup); } catch (_) {}
+  libraryRenderKey = '';
+  renderLibrary();
+}));
+document.querySelector('.library-tabs').addEventListener('keydown', event => {
+  if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+  const tabs = [...document.querySelectorAll('.library-tabs [role="tab"]')];
+  const next = tabs[(tabs.indexOf(document.activeElement) + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length];
+  next.focus();
+  next.click();
+});
+$('refresh-library').addEventListener('click', () => refreshLibrary(true));
 $('library-search').addEventListener('input', () => { libraryRenderKey = ''; renderLibrary(); });
-setInterval(() => {
-  if (document.body.dataset.view === 'library' && !document.hidden) refreshLibrary();
-}, 10000);
 
 function renderStations() {
   const state = snapshot.state;
@@ -333,6 +472,13 @@ function renderStations() {
   }));
 }
 $('station-search').addEventListener('input', () => { renderStations(); updateDisabled(); });
+$('station-search').addEventListener('keydown', event => {
+  // With a single match, Enter plays it.
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  const buttons = [...document.querySelectorAll('#station-list .station-play')];
+  if (buttons.length === 1 && !buttons[0].disabled && buttons[0].dataset.selected !== 'true') buttons[0].click();
+});
 
 function notify(message) {
   $('notice').textContent = message;
@@ -504,6 +650,7 @@ function render(data) {
   $('setup-message').hidden = !data.setupRequired;
   if (data.setupRequired && !setupShown) {
     setupShown = true;
+    showSettingsTab('pandora');
     history.replaceState(null, '', '#settings');
     showView('settings');
   }
@@ -517,7 +664,15 @@ function render(data) {
     history.replaceState(null, '', '#settings');
     showView('settings');
   }
-  $('source').textContent = state.offline ? 'FROM YOUR OFFLINE LIBRARY' : 'YOUR PERSONAL RADIO';
+  const run = data.playlist;
+  $('source').textContent = run ? `PLAYLIST · ${run.name.toLocaleUpperCase()} · ${run.position + 1} OF ${run.total}` :
+    state.offline ? 'FROM YOUR OFFLINE LIBRARY' : 'YOUR PERSONAL RADIO';
+  $('playlist-crumb').hidden = $('playlist-crumb-separator').hidden = !run;
+  if (run) {
+    $('playlist-crumb').textContent = '♪ ' + run.name;
+    $('playlist-crumb').title = `Playlist · song ${run.position + 1} of ${run.total}`;
+    $('playlist-crumb').dataset.id = run.id;
+  }
   $('title').textContent = state.title || 'Something good is next.';
   $('artist').textContent = state.artist || 'Connect to your station and make yourself at home.';
   $('album').textContent = state.album || '';
@@ -526,15 +681,15 @@ function render(data) {
     ? 'Reconnect to browse and manage your Pandora stations.'
     : (state.station ? `Listening to ${state.station}. Choose another station or shape your mix.` : 'Choose a station or discover something new.');
   $('current-track').textContent = state.title || 'Nothing playing';
-  document.title = `pianobar ${$('station').textContent} / ${$('current-track').textContent}`;
+  document.title = `pianobar ${$('station').textContent}${run ? ' / ' + run.name : ''} / ${$('current-track').textContent}`;
   $('mode-button').textContent = state.offline ? '↗ Reconnect' : '↓ Go offline';
   $('play-button').textContent = state.paused ? '▶' : 'Ⅱ';
   $('play-button').setAttribute('aria-label', state.paused ? 'Resume playback' : 'Pause playback');
   $('volume').textContent = `${state.volume || 0} dB`;
   if (desiredOutput === state.output) desiredOutput = null;
-  $('audio-output').value = desiredOutput || state.output || 'host';
+  $('audio-output').value = desiredOutput || state.output || 'browser';
   if (data.exited || data.playerStopped || data.restarting || (!desiredOutput && state.output === 'host')) stopListening();
-  if (state.paused && !djKeepsMusic(data)) clearAudioQueue();
+  if (state.paused) clearAudioQueue();
   $('elapsed').textContent = time(state.elapsed);
   $('duration').textContent = time(state.duration);
   $('progress').max = Math.max(1, state.duration || 0);
@@ -547,6 +702,7 @@ function render(data) {
   renderArtwork([source, !state.offline ? state.cover : '', state.metadata?.cover].filter(url => typeof url === 'string' && (/^https?:\/\//i.test(url) || /^\/api\/artwork\/[0-9a-f]{64}$/.test(url))));
   renderMetadata(state);
   renderDJ(data);
+  playlistRun = data.playlist || null;
   const transcript = $('transcript');
   const output = data.output || 'Waiting for the player…';
   if (transcript.textContent !== output) {
@@ -567,12 +723,15 @@ function render(data) {
   updateDisabled();
 }
 function clearAudioQueue() {
-  const retryIntro = !!djController && !djSpeaking && snapshot.djAnnouncement?.songKey === snapshot.state.songKey;
-  if (djController || djSpeaking) stopDJ();
-  if (retryIntro) djAnnouncement = Math.max(0, snapshot.djAnnouncement.id - 1);
   for (const source of audioSources) { try { source.stop(); } catch (_) {} }
   audioSources.clear();
   audioNextTime = 0;
+}
+function showListening(on) {
+  const button = $('listen-button');
+  button.setAttribute('aria-pressed', String(on));
+  button.setAttribute('aria-label', on ? 'Stop listening' : 'Listen here');
+  button.title = on ? 'Stop listening in this browser' : 'Listen in this browser';
 }
 function stopListening() {
   ++audioGeneration;
@@ -582,14 +741,12 @@ function stopListening() {
   // Keep the user-activated context alive so remote routing can resume playback.
   audioEpoch = null;
   browserStatus = 'idle';
-  $('listen-button').textContent = 'Listen here';
+  showListening(false);
   $('audio-status').textContent = '';
-  stopDJ();
   if (browserId) browserRequest('heartbeat', {id: browserId, status: 'idle', ready: false}).catch(() => {});
-  renderDJ(snapshot);
 }
 function queueAudio(data, rate, channels, little, epoch) {
-  if (!audioContext || (snapshot.state.paused && !djKeepsMusic(snapshot))) return;
+  if (!audioContext || snapshot.state.paused) return;
   if (epoch !== audioEpoch) { clearAudioQueue(); audioEpoch = epoch; }
   const frames = data.byteLength / (channels * 2);
   const buffer = audioContext.createBuffer(channels, frames, rate);
@@ -602,14 +759,14 @@ function queueAudio(data, rate, channels, little, epoch) {
   // Network reads arrive in bursts. Keep contiguous samples scheduled through
   // those bursts instead of destroying the queue whenever it exceeds a second.
   // Only resync truly stale audio (for example after a device wakes from sleep).
-  if (audioNextTime > now + 8) {
+  if (audioNextTime > now + 12) {
     clearAudioQueue();
     ++audioStats.resyncs;
   }
   if (audioNextTime < now + .02) {
     if (audioNextTime) {
       ++audioStats.underruns;
-      audioBufferSeconds = Math.min(2.5, audioBufferSeconds + .4);
+      audioBufferSeconds = Math.min(4, audioBufferSeconds + .5);
     }
     audioNextTime = now + audioBufferSeconds;
   }
@@ -622,13 +779,12 @@ function queueAudio(data, rate, channels, little, epoch) {
   source.onended = () => {
     audioSources.delete(source);
     source.disconnect();
-    if (!audioSources.size && audioController) { browserStatus = 'waiting'; renderDJ(snapshot); }
+    if (!audioSources.size && audioController) browserStatus = 'waiting';
   };
   source.start(audioNextTime);
   audioNextTime += buffer.duration;
   $('audio-status').textContent = 'Playing in this browser';
   browserStatus = 'playing';
-  renderDJ(snapshot);
 }
 async function startListening() {
   if (audioController) return;
@@ -638,15 +794,14 @@ async function startListening() {
   if (!audioContext || audioContext.state === 'closed') {
     audioContext = new Context({latencyHint: 'playback'});
     audioGain = audioContext.createGain();
-    audioGain.gain.value = browserVolume * (djSpeaking ? .2 : 1);
+    audioGain.gain.value = browserVolume;
     audioGain.connect(audioContext.destination);
-    audioContext.addEventListener('statechange', () => { if (audioContext.state !== 'running' && !djKeepsMusic(snapshot)) stopDJ(); });
   }
   // A remote request must not hang indefinitely on the browser's autoplay gate.
   await Promise.race([audioContext.resume(), new Promise(resolve => setTimeout(resolve, 500))]);
   if (audioContext.state !== 'running') {
     browserStatus = 'blocked';
-    $('audio-status').textContent = 'Audio requested · click Listen here to allow playback';
+    $('audio-status').textContent = 'Audio requested · tap the headphones to allow playback';
     return;
   }
   await registerBrowser();
@@ -654,7 +809,7 @@ async function startListening() {
   const controller = audioController = new AbortController();
   if (controller.signal.aborted) return;
   browserStatus = 'waiting';
-  $('listen-button').textContent = 'Stop listening';
+  showListening(true);
   $('audio-status').textContent = 'Waiting for audio…';
   (async () => {
     const response = await fetch('/api/audio', {signal: controller.signal,
@@ -726,57 +881,6 @@ window.addEventListener('pageshow', event => {
   pollBrowser();
 });
 
-function djHasAirtime(data = snapshot) {
-  return !!(djAirtimeToken || djAirtimePending) && djAirtimeSong === data.state.songKey &&
-    !!data.djAirtime?.clients.includes(browserId);
-}
-function djKeepsMusic(data) {
-  return djHasAirtime(data) || (djAirtimeReleasing && djAirtimeSong === data.state.songKey);
-}
-async function releaseDJAirtime() {
-  const token = djAirtimeToken, clientId = browserId;
-  djAirtimeToken = null;
-  djAirtimePending = false;
-  if (!token) return;
-  djAirtimeReleasing = true;
-  try {
-    const result = await djJSON('/api/dj/airtime', {operation: 'end', token, clientId});
-    if (djAirtimeSong === snapshot.state.songKey && typeof result.paused === 'boolean') snapshot.state.paused = result.paused;
-  } catch (_) { /* The server also releases abandoned airtime after 45 seconds. */ }
-  finally {
-    if (browserDesired && audioContext?.state === 'suspended') await audioContext.resume().catch(() => {});
-    djAirtimeReleasing = false;
-    djAirtimeSong = null;
-  }
-}
-async function reserveDJAirtime(generation, songKey) {
-  if (snapshot.djStation?.settings?.play_over_music !== false) return true;
-  djAirtimePending = true;
-  djAirtimeSong = songKey;
-  try {
-    await browserRequest('heartbeat', {id: browserId, status: 'playing', ready: true});
-    const result = await djJSON('/api/dj/airtime', {operation: 'begin', songKey, clientId: browserId});
-    if (generation !== djGeneration || !browserDesired || browserVolume <= 0 || songKey !== snapshot.state.songKey) {
-      await djJSON('/api/dj/airtime', {operation: 'end', token: result.token, clientId: browserId});
-      return false;
-    }
-    djAirtimeToken = result.token;
-    djAirtimePending = false;
-    snapshot.djAirtime = result.airtime;
-    await audioContext.suspend();
-    return generation === djGeneration;
-  } catch (error) {
-    djAirtimePending = false;
-    if (!djAirtimeToken) djAirtimeSong = null;
-    throw error;
-  }
-}
-function djListening() {
-  return djEnabled && browserDesired && browserVolume > 0 && !!audioController &&
-    (audioContext?.state === 'running' || (audioContext?.state === 'suspended' && djHasAirtime())) &&
-    (!snapshot.state.paused || djHasAirtime()) && snapshot.state.output !== 'host' &&
-    !snapshot.exited && !snapshot.playerStopped && !snapshot.restarting && !snapshot.setupRequired;
-}
 function browserPlaybackStatus() {
   if (audioController && browserDesired && audioContext?.state === 'running' && !snapshot.state.paused) {
     const now = audioContext.currentTime;
@@ -784,194 +888,147 @@ function browserPlaybackStatus() {
   }
   return browserStatus === 'playing' ? 'waiting' : browserStatus;
 }
-function djCanSpeak() {
-  if (!djListening() || voiceSampleController || voiceSampleAudio || djAirtimeReleasing) return false;
-  if (djHasAirtime()) return true;
-  if (browserStatus !== 'playing') return false;
-  const now = audioContext.currentTime;
-  return [...audioSources].some(source => source.playbackStart <= now && source.playbackEnd > now);
+
+// The server writes, voices and mixes the DJ into the player's own output, so
+// every speaker and browser hears it. This page only shows and steers it.
+const djVoiceStates = {writing: 'Writing an intro…', preparing: 'Warming up the mic…', on_air: 'On air'};
+const djStationStates = {choosing: 'Picking the next set…', preparing_intro: 'Writing the set intro…', waiting_listener: 'Waiting for music to play'};
+function djSong(song) { return `${song.artist || 'Unknown artist'} — ${song.title || 'Untitled'}`; }
+function renderDJ(data) {
+  const station = data.djStation || {}, voice = data.djVoice || {}, state = data.state || {};
+  const playerUp = !data.exited && !data.playerStopped && !data.restarting && !data.setupRequired;
+  const llm = !!station.llmReady, voiced = !!station.voiceReady, talk = !!station.talk, hop = !!station.hop;
+  const active = ['writing', 'preparing', 'on_air'].includes(voice.status);
+  // Settings → Try your DJ: speak a line or ask for an intro on demand.
+  const playing = playerUp && !!state.title;
+  document.querySelector('.dj-try').hidden = !llm && !voiced;
+  $('dj-text').hidden = $('dj-say').hidden = !voiced;
+  $('dj-introduce').hidden = !llm || !voiced;
+  $('dj-introduce').disabled = !playing || active;
+  $('dj-say').disabled = !playing || !$('dj-text').value.trim();
+  $('dj-text').disabled = !playerUp;
+  const booth = $('dj-booth');
+  // Without an LLM or a voice there is no DJ to show.
+  booth.hidden = !llm && !voiced;
+  if (booth.hidden) return;
+  const busyStation = djStationStates[station.enabled && station.status];
+  const label = djVoiceStates[voice.status] || busyStation ||
+    (station.enabled ? 'Running the station' : hop ? 'Hopping stations' : talk ? 'Standing by' : 'Off');
+  booth.dataset.state = voice.status === 'on_air' ? 'on-air' : active || busyStation ? 'busy' :
+    talk || station.enabled || hop ? 'ready' : 'off';
+  $('dj-state').textContent = label;
+  $('dj-name').textContent = station.settings?.dj_name || 'Your DJ';
+
+  if (!djBusy) {
+    $('dj-talk').checked = talk;
+    $('dj-station-enabled').checked = !!station.enabled;
+    $('dj-hop').checked = hop;
+  }
+  // Each switch only appears when what it needs is configured.
+  $('dj-talk-switch').hidden = !voiced;
+  $('dj-pick-switch').hidden = !llm;
+  $('dj-talk').disabled = $('dj-station-enabled').disabled = $('dj-hop').disabled = djBusy;
+  $('dj-pick-switch').title = state.offline || station.enabled ? 'Builds sets from your saved songs' : 'Builds sets from your saved songs (switches to offline playback)';
+  $('dj-hop').disabled = djBusy || (!hop && !!state.offline);
+  $('dj-hop-switch').title = state.offline && !hop ? 'Reconnect to Pandora to hop stations' : `Moves to a random Pandora station every ${station.hopSongs || 4} songs`;
+  if (document.activeElement !== $('dj-theme') && !$('dj-theme').dataset.edited) $('dj-theme').value = station.theme || '';
+
+  // The last line stays up after it airs so you can read what was said.
+  const line = voice.text && (active || voice.status === 'done') && voice.songKey === state.songKey ? voice.text : '';
+  $('dj-mic').hidden = !line && voice.status !== 'writing';
+  $('dj-line').textContent = line || 'Writing…';
+  $('dj-mic').classList.toggle('dj-mic-live', voice.status === 'on_air');
+  $('dj-stop').hidden = !active;
+
+  const notices = [];
+  if (voice.status === 'error' && voice.error) notices.push(voice.error);
+  if (station.enabled && station.status === 'error' && station.error) notices.push(station.error);
+  $('dj-notice').hidden = !notices.length;
+  $('dj-notice-text').textContent = notices.join(' ');
+  $('dj-notice-link').hidden = true;
+
+
+  const set = station.currentSet, next = station.next;
+  const items = set ? set.songs.map((song, index) => ({song, now: index + 1 === set.position, done: index + 1 < set.position}))
+    : next?.songs ? next.songs.map(song => ({song})) : next ? [{song: next}] : [];
+  if (set && next && !next.songs && !set.songs.some(song => song.id === next.id)) items.push({song: next, after: true});
+  const stationName = id => (state.stations || []).find(item => item.id === id)?.name;
+  const hopNext = hop && station.hopNext ? stationName(station.hopNext) : '';
+  $('dj-lineup-title').textContent = set ? `This set · ${set.position} of ${set.songs.length}${set.duration ? ' · ' + time(set.duration) : ''}` :
+    next?.songs ? `Next set · ${next.songs.length} songs${next.duration ? ' · ' + time(next.duration) : ''}` :
+    next ? 'Up next' : hopNext ? 'Next station: ' + hopNext : hop && !state.offline ? `Station hop · ${station.hopCount || 0} of ${station.hopSongs || 4}` : 'Lineup & theme';
+  $('dj-hop-status').hidden = !hop || !!state.offline;
+  $('dj-hop-status').textContent = hopNext ? `Switching to ${hopNext} after this song.` :
+    `Song ${Math.max(1, station.hopCount || 0)} of ${station.hopSongs || 4} on ${state.station || 'this station'}, then a random station.`;
+  const signature = JSON.stringify(items.map(item => [item.song.id, item.now, item.done, item.after]));
+  if ($('dj-queue').dataset.signature !== signature) {
+    $('dj-queue').dataset.signature = signature;
+    $('dj-queue').replaceChildren(...items.map(item => {
+      const row = document.createElement('li');
+      row.textContent = (item.after ? 'Then ' : '') + djSong(item.song);
+      row.className = item.now ? 'dj-now' : item.done ? 'dj-done' : item.after ? 'dj-after' : '';
+      if (item.now) row.setAttribute('aria-current', 'true');
+      return row;
+    }));
+  }
+  $('dj-queue').hidden = !items.length;
+  $('dj-lineup-empty').hidden = !!items.length || !llm;
+  $('dj-lineup-empty').textContent = station.enabled ? 'The DJ is lining up songs from your library…' :
+    'Turn on “Picks music” and the DJ builds sets from your saved songs.';
+  $('dj-theme-form').hidden = !llm;
 }
-function duckDJ(speaking) {
-  djSpeaking = speaking;
-  if (audioGain) audioGain.gain.value = browserVolume * (speaking ? .2 : 1);
-  $('dj-stop').disabled = !speaking && !djController;
+async function djControl(change) {
+  djBusy = true;
+  renderDJ(snapshot);
+  try {
+    snapshot.djStation = await djJSON('/api/dj/control', change);
+  } catch (error) { notify(error.message); }
+  finally { djBusy = false; renderDJ(snapshot); }
 }
-function stopDJ() {
-  ++djGeneration;
-  if (djController) djController.abort();
-  djController = null;
-  if (djAudio) { djAudio.pause(); djAudio.removeAttribute('src'); djAudio = null; }
-  if (djObjectURL) { URL.revokeObjectURL(djObjectURL); djObjectURL = null; }
-  if (djUtterance) { speechSynthesis.cancel(); djUtterance = null; }
-  duckDJ(false);
-  releaseDJAirtime();
-}
-async function djJSON(path, message, signal) {
-  const response = await fetch(path, message === undefined ? {signal} : {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(message), signal
+async function djJSON(path, message) {
+  const response = await fetch(path, message === undefined ? {} : {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(message)
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'The DJ could not prepare that line.');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'The DJ could not do that.');
   return data;
 }
-async function speakDJ(text, songKey) {
-  stopDJ();
-  if (!djCanSpeak() || songKey !== snapshot.state.songKey) return;
-  const generation = djGeneration;
-  $('dj-line').textContent = text;
-  $('dj-line').hidden = false;
-  $('dj-status').textContent = 'Preparing the voice…';
-  if (djInfo.voiceReady) {
-    const controller = djController = new AbortController();
-    $('dj-stop').disabled = false;
-    const timeout = setTimeout(() => controller.abort(), 35000);
-    try {
-      const response = await fetch('/api/voice', {method: 'POST',
-        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}), signal: controller.signal});
-      if (!response.ok) { const data = await response.json(); throw new Error(data.error); }
-      const blob = await response.blob();
-      if (!djCanSpeak() || generation !== djGeneration || songKey !== snapshot.state.songKey) return;
-      if (!await reserveDJAirtime(generation, songKey)) return;
-      djObjectURL = URL.createObjectURL(blob);
-      const audio = djAudio = new Audio(djObjectURL);
-      audio.volume = browserVolume;
-      audio.onended = () => { if (generation === djGeneration) { stopDJ(); $('dj-status').textContent = 'Listening for the next song.'; } };
-      audio.onerror = () => { if (generation === djGeneration) { stopDJ(); $('dj-status').textContent = 'Could not play the DJ audio.'; } };
-      duckDJ(true);
-      await audio.play();
-      $('dj-status').textContent = 'DJ on air';
-    } catch (error) {
-      if (generation === djGeneration) {
-        stopDJ();
-        $('dj-status').textContent = error.name === 'AbortError' ? 'Voice preparation timed out.' : error.message;
-      }
-    } finally {
-      clearTimeout(timeout);
-      if (djController === controller) djController = null;
-    }
-  } else if ('speechSynthesis' in window) {
-    try { if (!await reserveDJAirtime(generation, songKey)) return; }
-    catch (error) { stopDJ(); $('dj-status').textContent = error.message; return; }
-    const utterance = djUtterance = new SpeechSynthesisUtterance(text);
-    utterance.volume = browserVolume;
-    const localVoice = speechSynthesis.getVoices().find(voice => voice.localService && voice.lang.startsWith('en'));
-    if (localVoice) utterance.voice = localVoice;
-    utterance.onend = () => {
-      if (generation === djGeneration) { stopDJ(); $('dj-status').textContent = 'Listening for the next song.'; }
-    };
-    utterance.onerror = () => {
-      if (generation === djGeneration) { stopDJ(); $('dj-status').textContent = 'Browser voice is unavailable. Configure a voice endpoint on the server.'; }
-    };
-    duckDJ(true);
-    speechSynthesis.speak(utterance);
-    $('dj-status').textContent = 'DJ on air · browser voice';
-  } else $('dj-status').textContent = 'Configure a voice endpoint on the server to hear the DJ.';
-}
-async function introduceDJ() {
-  if (!djCanSpeak() || !snapshot.state.title) return;
-  stopDJ();
-  const generation = djGeneration, songKey = snapshot.state.songKey;
-  djGeneratedTrack = songKey;
-  const controller = djController = new AbortController();
-  $('dj-stop').disabled = false;
-  $('dj-status').textContent = 'The DJ is writing an introduction…';
-  const timeout = setTimeout(() => controller.abort(), 35000);
-  try {
-    await browserRequest('heartbeat', {id: browserId, status: browserPlaybackStatus(), ready: audioContext?.state === 'running'});
-    const result = await djJSON('/api/dj', {style: $('dj-style').value}, controller.signal);
-    if (djEnabled && generation === djGeneration && songKey === snapshot.state.songKey && result.songKey === songKey) {
-      await speakDJ(result.text, result.songKey);
-    }
-  } catch (error) {
-    if (generation === djGeneration) $('dj-status').textContent = error.name === 'AbortError' ? 'DJ preparation timed out.' : error.message;
-  } finally {
-    clearTimeout(timeout);
-    if (djController === controller) { djController = null; $('dj-stop').disabled = !djSpeaking; }
-  }
-}
-function renderDJ(data) {
-  const state = data.state;
-  const station = data.djStation || {};
-  $('dj-station-enabled').checked = !!station.enabled;
-  if (document.activeElement !== $('dj-theme') && !$('dj-theme').dataset.edited && station.theme) $('dj-theme').value = station.theme;
-  if (document.activeElement !== $('dj-style') && !$('dj-style').dataset.edited && station.style) $('dj-style').value = station.style;
-  const set = station.currentSet;
-  const upcoming = station.next?.songs;
-  $('dj-station-status').textContent = station.error || (station.enabled ? (station.status === 'waiting_listener' ? 'DJ is waiting for music to play in a listening browser.' :
-    (upcoming ? `Next set: ${upcoming.length} songs · ${time(station.next.duration)} — ${upcoming.map(song => `${song.artist} — ${song.title}`).join('; ')}` :
-      (set ? `Set ${set.position}/${set.songs.length} · ${time(set.duration)}${station.next ? ' · Up next: ' + station.next.artist + ' — ' + station.next.title : ''}` :
-        (station.next ? `Up next: ${station.next.artist} — ${station.next.title}` : 'The DJ is choosing the next cached set…')))) : 'Cached-song DJ station is off.');
-  if (state.songKey !== djTrack) {
-    stopDJ();
-    djTrack = state.songKey;
-    $('dj-line').hidden = true;
-  }
-  if (!djEnabled) return;
-  if (data.exited || data.playerStopped || data.restarting) { stopDJ(); djAnnouncement = 0; return; }
-  const canSpeak = djCanSpeak();
-  $('dj-introduce').disabled = !canSpeak || !djInfo.llmReady || !state.title;
-  $('dj-say').disabled = !canSpeak;
-  if (!canSpeak) {
-    if (djSpeaking || djController) stopDJ();
-    if (!djListening()) djAnnouncement = Math.max(djAnnouncement, data.djAnnouncement?.id || 0);
-    $('dj-status').textContent = 'DJ is quiet until music plays in this browser.';
-    return;
-  }
-  const announcement = data.djAnnouncement || {};
-  if (announcement.id > djAnnouncement) {
-    djAnnouncement = announcement.id;
-    if (announcement.songKey === state.songKey) {
-      djGeneratedTrack = state.songKey;
-      speakDJ(announcement.text, announcement.songKey);
-      return;
-    }
-  }
-  if (!station.enabled && djInfo.llmReady && state.title && !state.paused && !data.pending && !data.prompt.active &&
-      djGeneratedTrack !== state.songKey && (state.metadata?.status || state.elapsed > 3)) introduceDJ();
-}
-$('dj-enabled').addEventListener('change', async event => {
-  djEnabled = event.target.checked;
-  stopDJ();
-  $('dj-say').disabled = !djEnabled;
-  $('dj-introduce').disabled = true;
-  djGeneratedTrack = '';
-  djAnnouncement = snapshot.djAnnouncement?.id || 0;
-  if (!djEnabled) { $('dj-status').textContent = 'DJ mode is off.'; return; }
-  const generation = djGeneration;
-  try {
-    djInfo = await djJSON('/api/dj');
-    if (!djEnabled || generation !== djGeneration) return;
-    $('dj-status').textContent = djInfo.llmReady ? 'Listening for the next song.' :
-      'Agent DJ ready. Supply a line below, or configure an LLM endpoint on the server for automatic introductions.';
-    renderDJ(snapshot);
-  } catch (error) { if (djEnabled) $('dj-status').textContent = error.message; }
+$('dj-talk').addEventListener('change', event => djControl({talk: event.target.checked}));
+$('dj-hop').addEventListener('change', event => djControl({hop: event.target.checked}));
+$('dj-station-enabled').addEventListener('change', event => {
+  const change = {enabled: event.target.checked};
+  if ($('dj-theme').value.trim()) change.theme = $('dj-theme').value;
+  djControl(change);
 });
-for (const id of ['dj-theme', 'dj-style']) $(id).addEventListener('input', () => { $(id).dataset.edited = 'true'; });
-$('dj-station-enabled').addEventListener('change', async event => {
-  const enabled = event.target.checked;
-  event.target.disabled = true;
-  try {
-    const station = await djJSON('/api/dj/control', {enabled, theme: $('dj-theme').value, style: $('dj-style').value});
-    snapshot.djStation = station;
-    if (enabled && !djEnabled) {
-      $('dj-enabled').checked = true;
-      $('dj-enabled').dispatchEvent(new Event('change'));
-    }
-    renderDJ(snapshot);
-  } catch (error) { notify(error.message); event.target.checked = !enabled; }
-  finally { event.target.disabled = false; }
-});
-$('dj-introduce').addEventListener('click', introduceDJ);
-$('dj-stop').addEventListener('click', () => { stopDJ(); $('dj-status').textContent = 'Voice stopped.'; });
-$('dj-line-form').addEventListener('submit', async event => {
+$('dj-theme').addEventListener('input', () => { $('dj-theme').dataset.edited = 'true'; });
+$('dj-theme-form').addEventListener('submit', async event => {
   event.preventDefault();
-  if (!djCanSpeak()) return;
-  try {
-    await djJSON('/api/dj/announce', {text: $('dj-text').value, songKey: snapshot.state.songKey});
-    $('dj-text').value = '';
-  } catch (error) { $('dj-status').textContent = error.message; }
+  if (!$('dj-theme').value.trim()) return;
+  await djControl({theme: $('dj-theme').value});
+  delete $('dj-theme').dataset.edited;
+  notify('Theme set. The DJ uses it for the next set.');
 });
-window.addEventListener('pagehide', stopDJ);
+$('dj-introduce').addEventListener('click', async () => {
+  try { snapshot.djVoice = await djJSON('/api/dj/introduce', {}); renderDJ(snapshot); notify('The DJ is writing an intro.'); }
+  catch (error) { notify(error.message); }
+});
+$('dj-stop').addEventListener('click', () => djControl({stopVoice: true}));
+async function speakLine() {
+  const text = $('dj-text').value.trim();
+  if (!text || $('dj-say').disabled) return;
+  try {
+    snapshot.djVoice = await djJSON('/api/dj/announce', {text, songKey: snapshot.state.songKey});
+    $('dj-text').value = '';
+    renderDJ(snapshot);
+    notify('The DJ is on it.');
+  } catch (error) { notify(error.message); }
+}
+$('dj-say').addEventListener('click', speakLine);
+$('dj-text').addEventListener('input', () => renderDJ(snapshot));
+$('dj-text').addEventListener('keydown', event => {
+  // This field sits inside the settings form; Enter speaks instead of saving.
+  if (event.key === 'Enter') { event.preventDefault(); speakLine(); }
+});
 
 function renderMetadata(state) {
   const metadata = state.metadata || {};
@@ -982,8 +1039,14 @@ function renderMetadata(state) {
   $('song-metadata').textContent = [genres && (metadata.genreScope === 'artist' ? `Artist genres: ${genres}` : genres), metadata.releaseDate].filter(Boolean).join(' · ');
   $('song-metadata').hidden = !$('song-metadata').textContent;
   const recordingId = metadata.recordingId || '';
-  $('metadata-source').hidden = !/^[0-9a-f-]{36}$/.test(recordingId);
-  if (!$('metadata-source').hidden) $('metadata-source').href = 'https://musicbrainz.org/recording/' + recordingId;
+  // Without a matched recording, search MusicBrainz instead.
+  const matched = /^[0-9a-f-]{36}$/.test(recordingId);
+  $('metadata-source').hidden = false;
+  $('metadata-source').href = matched ? 'https://musicbrainz.org/recording/' + recordingId :
+    'https://musicbrainz.org/search?type=recording&method=indexed&query=' +
+    encodeURIComponent(`recording:"${state.title || ''}" AND artist:"${state.artist || ''}"`);
+  $('metadata-source').title = matched ? 'MusicBrainz' : 'Search MusicBrainz';
+  $('metadata-source').setAttribute('aria-label', matched ? 'Open this recording on MusicBrainz' : 'Search MusicBrainz for this song');
 }
 
 function followTranscript() {
@@ -1100,7 +1163,7 @@ async function loadVoiceChoices() {
     renderVoiceChoices(data.voices, $('setting-dj-voice').value, data.default);
     $('dj-voices-status').textContent = data.configured ?
       `${data.voices.length} voices available.${data.default ? ' Server default: ' + data.default + '.' : ''} Save & restart player after changing the endpoint.` :
-      'Configure a voice endpoint to choose its voices. Without one, DJ mode uses the browser’s default voice.';
+      'Configure a voice endpoint to choose its voices. Without one, the server speaks with espeak-ng when it is installed.';
   } catch (error) {
     if (generation === voiceChoicesGeneration) $('dj-voices-status').textContent = error.name === 'AbortError' ?
       'Voice list timed out. Your selected voice is preserved.' : error.message;
@@ -1120,7 +1183,6 @@ function stopVoiceSample() {
 }
 $('sample-dj-voice').addEventListener('click', async () => {
   if (voiceSampleController || voiceSampleAudio) { stopVoiceSample(); $('voice-sample-status').textContent = 'Sample stopped.'; return; }
-  stopDJ();
   const controller = voiceSampleController = new AbortController();
   const voice = $('setting-dj-voice').value;
   $('sample-dj-voice').textContent = 'Stop sample';
@@ -1134,7 +1196,7 @@ $('sample-dj-voice').addEventListener('click', async () => {
     if (voiceSampleController !== controller) return;
     voiceSampleURL = URL.createObjectURL(blob);
     const audio = voiceSampleAudio = new Audio(voiceSampleURL);
-    audio.onended = () => { if (voiceSampleAudio === audio) { stopVoiceSample(); $('voice-sample-status').textContent = 'Sample finished. Save settings to use this voice immediately.'; } };
+    audio.onended = () => { if (voiceSampleAudio === audio) { stopVoiceSample(); $('voice-sample-status').textContent = 'Sample finished. Save to use this voice right away.'; } };
     audio.onerror = () => { if (voiceSampleAudio === audio) { stopVoiceSample(); $('voice-sample-status').textContent = 'Could not play the voice sample.'; } };
     await audio.play();
     if (voiceSampleAudio === audio) $('voice-sample-status').textContent = `Playing ${voice || 'the server default voice'}.`;
@@ -1145,7 +1207,42 @@ $('sample-dj-voice').addEventListener('click', async () => {
 $('setting-dj-voice').addEventListener('change', () => { stopVoiceSample(); $('voice-sample-status').textContent = 'Preview this voice, or save settings to apply it immediately.'; });
 window.addEventListener('pagehide', stopVoiceSample);
 
-const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'dj_name', 'listener_name'];
+// Settings are one form split into tabs; switching tabs never loses edits.
+let settingsTab = 'listening';
+try { settingsTab = localStorage.getItem('pianobarSettingsTab') || 'listening'; } catch (_) {}
+function showSettingsTab(tab, focus = false) {
+  if (!$('settings-panel-' + tab)) tab = 'listening';
+  settingsTab = tab;
+  try { localStorage.setItem('pianobarSettingsTab', tab); } catch (_) {}
+  document.querySelectorAll('.settings-tabs [role="tab"]').forEach(button => {
+    const selected = button.dataset.tab === tab;
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+    if (selected && focus) button.focus();
+  });
+  document.querySelectorAll('.settings-panel').forEach(panel => { panel.hidden = panel.id !== 'settings-panel-' + tab; });
+}
+document.querySelectorAll('.settings-tabs [role="tab"]').forEach(button =>
+  button.addEventListener('click', () => showSettingsTab(button.dataset.tab)));
+document.querySelector('.settings-tabs').addEventListener('keydown', event => {
+  if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+  const tabs = [...document.querySelectorAll('.settings-tabs [role="tab"]')];
+  const index = tabs.findIndex(button => button.dataset.tab === settingsTab);
+  showSettingsTab(tabs[(index + (event.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length].dataset.tab, true);
+});
+// An invalid field on a hidden tab would block saving silently; reveal it.
+$('settings-form').addEventListener('invalid', event => {
+  const panel = event.target.closest('.settings-panel');
+  if (panel?.hidden) showSettingsTab(panel.id.replace('settings-panel-', ''));
+}, true);
+function renderSetSize() {
+  const minutes = $('setting-dj-set_mode').value === 'minutes';
+  $('set-songs-field').hidden = minutes;
+  $('set-minutes-field').hidden = !minutes;
+}
+$('setting-dj-set_mode').addEventListener('change', renderSetSize);
+showSettingsTab(settingsTab);
+const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'dj_name', 'listener_name', 'hop_songs'];
 const settingsKeys = ['user', 'cache_dir', 'cache_songs', 'offline', 'offline_fallback', 'audio_quality', 'audio_buffer_ms'];
 async function loadSettings(force = false) {
   if (settingsBusy || (settingsLoaded && !force)) return;
@@ -1169,6 +1266,7 @@ async function loadSettings(force = false) {
       else input.value = data.dj[key] || '';
       input.disabled = data.dj.overrides.includes(key);
     }
+    renderSetSize();
     for (const key of ['llm_key', 'tts_key']) {
       $('setting-dj-' + key).value = '';
       $('setting-dj-' + key).disabled = data.dj.overrides.includes(key);
@@ -1269,5 +1367,224 @@ async function watch() {
 }
 watch();
 setInterval(() => {
-  if (!snapshot.exited && document.body.dataset.view === 'library') refreshLibrary();
-}, 3000);
+  if (!snapshot.exited && ['library', 'playlists'].includes(document.body.dataset.view) && !document.hidden) refreshLibrary();
+}, 5000);
+
+// Playlists: stored and played by the server; songs come from the saved library.
+async function loadPlaylists() {
+  try {
+    const data = await djJSON('/api/playlists');
+    playlists = data.playlists;
+    playlistRun = data.run;
+    playlistsLoaded = true;
+    renderPlaylists();
+  } catch (error) { $('playlist-empty').textContent = error.message; }
+}
+async function playlistRequest(path, message) {
+  try { return await djJSON(path, message); }
+  catch (error) { notify(error.message); return null; }
+}
+function selectPlaylist(id) {
+  playlistSelected = id;
+  try { localStorage.setItem('pianobarPlaylist', id); } catch (_) {}
+  renderPlaylists();
+}
+function storePlaylist(playlist) {
+  const index = playlists.findIndex(item => item.id === playlist.id);
+  if (index >= 0) playlists[index] = playlist; else playlists.push(playlist);
+  renderPlaylists();
+}
+const savePlaylist = async change => {
+  const playlist = await playlistRequest('/api/playlists/save', change);
+  if (playlist) storePlaylist(playlist);
+  return playlist;
+};
+function playlistDuration(seconds) {
+  const minutes = Math.round(seconds / 60);
+  return minutes >= 60 ? `${Math.floor(minutes / 60)} hr ${minutes % 60} min` : `${minutes} min`;
+}
+function renderPlaylists() {
+  if (!playlistsLoaded) return;
+  const songsById = new Map(savedSongs.map(song => [song.id, song]));
+  const currentId = snapshot.state.savedId || '';
+  const key = JSON.stringify([playlists, playlistSelected, savedSongs.length, currentId, playlistRun, playlistDeleteArmed,
+    snapshot.djStation?.llmReady, snapshot.djStation?.settings?.dj_name]);
+  if (key === playlistRenderKey) return;
+  playlistRenderKey = key;
+  const station = snapshot.djStation || {};
+  $('dj-playlist-form').hidden = !station.llmReady;
+  $('dj-playlist-who').textContent = station.settings?.dj_name ? 'Ask ' + station.settings.dj_name : 'Ask your DJ';
+  if (!playlists.some(item => item.id === playlistSelected)) playlistSelected = playlists[0]?.id || null;
+  $('playlist-list').replaceChildren(...playlists.map(playlist => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'playlist-card';
+    button.setAttribute('aria-pressed', String(playlist.id === playlistSelected));
+    button.classList.toggle('playing', playlistRun?.id === playlist.id);
+    const name = document.createElement('strong');
+    name.textContent = playlist.name;
+    const detail = document.createElement('small');
+    detail.textContent = `${playlist.songs.length} ${playlist.songs.length === 1 ? 'song' : 'songs'}` +
+      (playlist.by === 'dj' ? ' · by the DJ' : '') + (playlistRun?.id === playlist.id ? ' · playing' : '');
+    button.append(name, detail);
+    button.addEventListener('click', () => selectPlaylist(playlist.id));
+    return button;
+  }));
+  const playlist = playlists.find(item => item.id === playlistSelected);
+  $('playlist-empty').hidden = !!playlist;
+  $('playlist-view').hidden = !playlist;
+  if (!playlist) return;
+  if (document.activeElement !== $('playlist-name')) $('playlist-name').value = playlist.name;
+  if (document.activeElement !== $('playlist-description')) $('playlist-description').value = playlist.description || '';
+  const available = playlist.songs.filter(id => songsById.has(id));
+  const total = available.reduce((sum, id) => sum + (songsById.get(id).duration || 0), 0);
+  $('playlist-meta').textContent = [`${playlist.songs.length} ${playlist.songs.length === 1 ? 'song' : 'songs'}`, total ? playlistDuration(total) : '',
+    playlist.by === 'dj' ? 'made by your DJ' : '', available.length < playlist.songs.length ? `${playlist.songs.length - available.length} no longer saved` : '']
+    .filter(Boolean).join(' · ');
+  const running = playlistRun?.id === playlist.id;
+  $('playlist-play').disabled = $('playlist-shuffle').disabled = !available.length;
+  $('playlist-stop').hidden = !running;
+  $('playlist-delete').textContent = playlistDeleteArmed === playlist.id ? 'Really delete?' : 'Delete';
+  const move = (from, to) => {
+    const songs = [...playlist.songs];
+    songs.splice(to, 0, ...songs.splice(from, 1));
+    savePlaylist({id: playlist.id, songs});
+  };
+  const control = (label, text, handler, disabled = false) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = text;
+    button.setAttribute('aria-label', label);
+    button.title = label;
+    button.disabled = disabled;
+    button.addEventListener('click', handler);
+    return button;
+  };
+  $('playlist-songs').replaceChildren(...playlist.songs.map((id, index) => {
+    const song = songsById.get(id);
+    const row = document.createElement('li');
+    row.className = 'playlist-song';
+    row.classList.toggle('missing', !song);
+    row.classList.toggle('current', !!song && id === currentId);
+    let art = playlistArtwork.get(id);
+    if (!art) playlistArtwork.set(id, art = libraryArtwork(song || {}));
+    const info = document.createElement('div');
+    info.className = 'saved-song-info';
+    const title = document.createElement('p');
+    title.className = 'saved-song-title';
+    title.textContent = song ? songLabel(song) : 'Song no longer saved';
+    const detail = document.createElement('p');
+    detail.className = 'saved-song-detail';
+    detail.textContent = song ? [song.artist, song.album].filter(Boolean).join(' · ') : '';
+    info.append(title, detail);
+    const duration = document.createElement('span');
+    duration.className = 'saved-song-duration';
+    duration.textContent = song ? time(song.duration) : '';
+    const actions = document.createElement('div');
+    actions.className = 'playlist-song-actions';
+    const label = song ? songLabel(song) : 'this song';
+    actions.append(
+      control('Play from ' + label, '▶', () => playPlaylist({id: playlist.id, start: index}), !song),
+      control('Move ' + label + ' up', '↑', () => move(index, index - 1), index === 0),
+      control('Move ' + label + ' down', '↓', () => move(index, index + 1), index === playlist.songs.length - 1),
+      control('Remove ' + label, '✕', () => savePlaylist({id: playlist.id, songs: playlist.songs.filter(item => item !== id)})));
+    row.append(art, info, duration, actions);
+    return row;
+  }));
+}
+async function playPlaylist(message) {
+  const run = await playlistRequest('/api/playlists/play', message);
+  if (run) { playlistRun = run; renderPlaylists(); }
+}
+$('playlist-play').addEventListener('click', () => playPlaylist({id: playlistSelected}));
+$('playlist-shuffle').addEventListener('click', () => playPlaylist({id: playlistSelected, shuffle: true}));
+$('playlist-stop').addEventListener('click', async () => {
+  if (await playlistRequest('/api/playlists/stop', {})) { playlistRun = null; renderPlaylists(); }
+});
+$('playlist-delete').addEventListener('click', async () => {
+  const id = playlistSelected;
+  if (playlistDeleteArmed !== id) {
+    playlistDeleteArmed = id;
+    renderPlaylists();
+    setTimeout(() => { if (playlistDeleteArmed === id) { playlistDeleteArmed = null; renderPlaylists(); } }, 4000);
+    return;
+  }
+  playlistDeleteArmed = null;
+  if (await playlistRequest('/api/playlists/delete', {id})) {
+    playlists = playlists.filter(item => item.id !== id);
+    renderPlaylists();
+  }
+});
+$('playlist-name').addEventListener('change', event => {
+  if (event.target.value.trim()) savePlaylist({id: playlistSelected, name: event.target.value});
+});
+$('playlist-name').addEventListener('keydown', event => { if (event.key === 'Enter') event.target.blur(); });
+$('playlist-description').addEventListener('change', event => savePlaylist({id: playlistSelected, description: event.target.value}));
+$('new-playlist').addEventListener('click', async () => {
+  let number = playlists.length + 1;
+  while (playlists.some(item => item.name === `New playlist ${number}`)) ++number;
+  const playlist = await savePlaylist({name: `New playlist ${number}`, songs: []});
+  if (!playlist) return;
+  selectPlaylist(playlist.id);
+  $('playlist-name').focus();
+  $('playlist-name').select();
+});
+$('dj-playlist-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const who = snapshot.djStation?.settings?.dj_name || 'Your DJ';
+  $('dj-playlist-make').disabled = true;
+  $('dj-playlist-status').textContent = `${who} is digging through your crates…`;
+  try {
+    const playlist = await djJSON('/api/dj/playlist', {description: $('dj-playlist-prompt').value, count: Number($('dj-playlist-count').value)});
+    $('dj-playlist-prompt').value = '';
+    $('dj-playlist-status').textContent = `Made “${playlist.name}”.`;
+    storePlaylist(playlist);
+    selectPlaylist(playlist.id);
+  } catch (error) {
+    $('dj-playlist-status').textContent = error.message;
+  } finally { $('dj-playlist-make').disabled = false; }
+});
+$('dj-playlist-prompt').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('dj-playlist-form').requestSubmit(); }
+});
+let pickerSongs = [];
+async function openPlaylistPicker(ids, label) {
+  pickerSongs = ids;
+  if (!playlistsLoaded) await loadPlaylists();
+  $('playlist-picker-song').textContent = label;
+  $('playlist-picker-name').value = '';
+  $('playlist-picker-list').replaceChildren(...playlists.map(playlist => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'playlist-card';
+    const name = document.createElement('strong');
+    name.textContent = playlist.name;
+    const detail = document.createElement('small');
+    const has = ids.every(id => playlist.songs.includes(id));
+    detail.textContent = has ? 'Already added' : `${playlist.songs.length} songs`;
+    button.disabled = has;
+    button.append(name, detail);
+    button.addEventListener('click', async () => {
+      $('playlist-picker').close();
+      const saved = await playlistRequest('/api/playlists/add', {id: playlist.id, songs: ids});
+      if (saved) { storePlaylist(saved); notify(`Added to “${saved.name}”.`); }
+    });
+    return button;
+  }));
+  $('playlist-picker').showModal();
+  (playlists.length ? $('playlist-picker-list').querySelector('button:not(:disabled)') || $('playlist-picker-name') : $('playlist-picker-name')).focus();
+}
+async function createFromPicker() {
+  const name = $('playlist-picker-name').value.trim();
+  if (!name) { $('playlist-picker-name').focus(); return; }
+  $('playlist-picker').close();
+  const saved = await savePlaylist({name, songs: pickerSongs});
+  if (saved) notify(`Added to “${saved.name}”.`);
+}
+$('playlist-picker-create').addEventListener('click', createFromPicker);
+$('playlist-picker-name').addEventListener('keydown', event => {
+  if (event.key === 'Enter') { event.preventDefault(); createFromPicker(); }
+});
+$('playlist-crumb').addEventListener('click', () => {
+  if ($('playlist-crumb').dataset.id) selectPlaylist($('playlist-crumb').dataset.id);
+});

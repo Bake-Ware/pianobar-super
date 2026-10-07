@@ -58,6 +58,14 @@ typedef struct {
 	bool doQuit, doPause, outputError;
 	unsigned int outputMode; /* 1: host, 2: browser, 3: both */
 
+	/* DJ voice mixed into every output; survives song changes */
+	int16_t *voice;
+	size_t voiceFrames, voicePos;
+	unsigned int voiceRate, voiceChannels, voiceId, voiceDoneId;
+	bool voiceOverMusic;
+	float duck; /* current music gain, lowered while the DJ talks */
+	unsigned int outRate, outChannels; /* format of the last played frame */
+
 	/* measured in seconds */
 	unsigned int songDuration;
 	unsigned int songPlayed;
@@ -98,3 +106,6 @@ void BarPlayerInit (player_t * const p, const BarSettings_t * const settings);
 void BarPlayerReset (player_t * const p);
 void BarPlayerDestroy (player_t * const p);
 BarPlayerMode BarPlayerGetMode (player_t * const player);
+bool BarPlayerLoadVoice (player_t * const player, const char *path,
+		unsigned int id, bool overMusic);
+void BarPlayerStopVoice (player_t * const player);
