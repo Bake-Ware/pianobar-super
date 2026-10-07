@@ -115,51 +115,43 @@ only contacted when you click the link; the player does not embed videos.
 
 ## LLM DJ and voice endpoint
 
-Open **DJ mode** in Now playing, set a station theme and personality, and enable
-**Let the LLM pick songs from my local cache**. The server chooses validated
-tracks from your saved library, queues the next song while the current song
-finishes, and prepares its spoken introduction whenever Up next changes,
-including manual queue changes while DJ mode is active. Text and voice are
-prepared in the background; outdated results are discarded and the prepared
-intro plays when that song starts. Recent tracks are excluded from
-selection when alternatives exist. Large libraries use a rotating sample of
-100 candidates per selection. Missing LLM responses leave ordinary cached
-playback running.
+The **DJ booth** under Now playing has two switches:
 
-Enable **Hear DJ introductions in this browser** to listen, or submit your own
-line with **Speak**. With the station picker off, introductions can still be
-generated for the current Pandora or cached song.
-Voice plays in the enabled browser; its music volume is reduced while speaking.
-Song selection, introduction generation and automatic voice preparation only
-run while an enabled, unmuted browser has a live audio connection and recent
-heartbeats reporting actual music playback. Pause, stop, disconnect or routing
-away suspends that work; the DJ continues when browser playback resumes.
-Settings previews remain available with music stopped. Set **DJ name** and
-**Your name** to personalize introductions; both apply immediately on save.
-In Settings, size DJ sets by **Number of songs** (1–30) or **Minutes of music**
-(1–120). The LLM chooses an ordered set of local cached songs and prepares one
-summary for its beginning. Timed sets aim for the target using whole songs,
-up to 30; the queue shows their actual duration. Set sizing applies to the next
-selection when saved. **Play DJ intros over music** keeps the music underneath
-the voice. Uncheck it to pause the shared player and preserve the browser's
-audio buffers until the intro finishes. Stop, speech failure or leaving the
-page releases this airtime; abandoned reservations expire after 45 seconds.
-An explicit listener pause remains paused. Voice and intro playback choices
-apply on save without restarting.
-The DJ stays silent when this browser is not playing music, including pause,
-mute and routing away; stopping listening cancels ongoing speech. Host speakers
-keep their volume. Changing tracks or disabling DJ mode stops the
-voice. The shared DJ station starts off when the server starts; each browser
-starts with voice off. Starting from Pandora switches to cached-song playback.
-Reconnecting to Pandora stops the cached-song DJ. Disabling song selection
-clears the prepared queue; cached playback can continue normally.
+- **Talks**: the DJ introduces each new song once it has settled (about three
+  seconds in), and reads any line you type into **Give the DJ a line**.
+  **Introduce this song** asks for an introduction on demand; **Stop** cuts the
+  current line.
+- **Picks the music**: the server chooses validated tracks from your saved
+  library around the **Station theme**, queues the next set while the current
+  song finishes, and prepares one spoken summary for the start of each set. The
+  booth lists the current and upcoming set. Recent tracks are excluded when
+  alternatives exist, and large libraries use a rotating sample of 100
+  candidates per selection. A failed LLM response leaves cached playback running.
+
+The server does all of the DJ work. It writes the introduction, synthesizes the
+voice and hands the clip to the player, which mixes it into its own output. The
+DJ is therefore heard on Host speakers and in every listening browser at the
+same moment, with no browser needing to stay open. By default the music dips to
+a quarter, the DJ speaks, and the music returns. Uncheck **Talk over the music**
+in Settings to hold the music while the DJ speaks instead; the song then picks
+up from where it stopped. Pausing pauses the voice with the music; skipping,
+changing station or going online drops a line about the old song.
+
+The DJ only writes and picks music while someone can hear it: the player is not
+paused, and the output includes Host, or a browser is listening. **Talks** is
+remembered across restarts. The station picker starts off when the server
+starts, and reconnecting to Pandora stops it. Set **DJ name** and **Your name** to
+personalize introductions. In Settings, size DJ sets by **Number of songs**
+(1–30) or **Minutes of music** (1–120); timed sets aim for the target using whole
+songs. Names, personality, theme, voice and set sizing apply on save without a
+restart.
 
 Use **Settings → LLM DJ & voice** to edit endpoints, model, keys, voice,
 certificate path, default theme/personality and metadata fetching. The voice
 dropdown loads the active voice server’s `/voices` catalog and preserves your
 selection if that server is unavailable. **Sample voice** previews the selected
-voice before saving, even when music is stopped. **Save settings** applies voice
-selection immediately without restarting the player or server. Blank key
+voice in this browser before saving, even when music is stopped. **Save settings**
+applies it immediately without restarting the player or server. Blank key
 fields preserve saved keys; explicit Forget options clear them. Use **Save &
 restart player** to apply other provider changes. Environment overrides are labeled and their
 fields are disabled in the editor.
@@ -167,7 +159,8 @@ fields are disabled in the editor.
 Alternatively, set these environment variables before starting the server, or put the
 corresponding fields in private `$XDG_CONFIG_HOME/pianobar/dj.json` (default
 `~/.config/pianobar/dj.json`). Environment variables take precedence. JSON fields
-are `llm_url`, `model`, `llm_key`, `style`, `tts_url`, `voice`, `tts_key`, and optional `tts_ca`.
+are `llm_url`, `model`, `llm_key`, `style`, `tts_url`, `voice`, `tts_key`, optional `tts_ca`,
+and `talk`.
 
 | Variable | Purpose |
 | --- | --- |
@@ -187,9 +180,8 @@ on your provider. URLs and tokens are never included in public settings.
 
 The voice adapter sends `{text, voice}` and expects WAV, MP3, or Ogg audio in the
 HTTP response with the matching audio content type. Without a configured voice
-URL, `/api/voice` uses `espeak-ng` or `espeak` when installed on the server. If
-neither is available, the browser DJ can use its built-in speech voice; the
-server voice endpoint reports that a speech provider needs configuration.
+URL, the server uses `espeak-ng` or `espeak` when installed. If neither is
+available, the booth asks you to configure a voice and **Talks** stays off.
 
 `integrations/voice-tts.py` adds an authenticated `/api/voice` route to an
 existing FastAPI voice service through `install(app, authorize)`. It uses the
@@ -198,16 +190,16 @@ and request sizes, and admits one synthesis at a time. A private HTTPS
 certificate can be supplied through `PIANOBAR_TTS_CA`; TLS verification remains
 active.
 
-An external LLM agent can read song context and submit its own introductions:
+An external agent can read song context, steer the DJ and give it lines to say:
 
 | Endpoint | Behavior |
 | --- | --- |
 | `GET /api/dj` | Current song, metadata, provider readiness, and `songKey` |
 | `POST /api/dj` | Generate `{text, songKey}`; optional `{style}` request |
-| `POST /api/dj/control` | `{enabled, theme?, style?}` starts/stops the shared cached-song station |
+| `POST /api/dj/control` | Any of `{enabled, talk, stopVoice, theme, style}`: start/stop the station picker, turn the voice on/off, cut the current line, or change the theme or personality |
 | `POST /api/dj/pick` | `{play?, theme?, style?}` selects one cached song; queues by default, `play: true` plays immediately |
-| `POST /api/dj/announce` | Broadcast `{text, songKey?}` to browsers with DJ mode enabled |
-| `POST /api/dj/airtime` | Reserve/release temporary intro airtime for a registered listening browser |
+| `POST /api/dj/introduce` | Write and speak an introduction for the current song in the background; optional `{style}` |
+| `POST /api/dj/announce` | Speak `{text, songKey?}` through the player on every output, even when **Talks** is off |
 | `POST /api/voice` | Convert `{text, voice?}` to audio, without broadcasting it |
 
 For example, with the server running locally:
@@ -223,7 +215,9 @@ curl -H 'Content-Type: application/json' \
 ```
 
 Include `songKey` from `GET /api/dj` when an introduction belongs to a specific
-song, so an outdated announcement is rejected after a track change. The existing
+song, so an outdated announcement is rejected after a track change. The
+`djVoice` field of `GET /api/state` reports each line as `writing`, `preparing`,
+`on_air`, `done`, `idle` or `error`. The existing
 web authentication and origin checks apply to DJ and voice endpoints. Text is
 limited to 700 characters. Generation and voice requests have bounded concurrency
 and timeouts; repeated introductions for the same song and personality reuse the

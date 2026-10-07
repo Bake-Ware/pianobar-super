@@ -29,8 +29,17 @@ int main (int argc, char **argv) {
 		.album = "Test album", .coverArt = getenv ("PIANOBAR_TEST_ARTWORK"), .fileGain = -2.5};
 	player.url = argv[1];
 	player.song = &song;
-	player.local = strcmp (argv[4], "local") == 0;
+	player.local = strcmp (argv[4], "local") == 0 || strncmp (argv[4], "voice", 5) == 0;
 	player.mode = PLAYER_WAITING;
+	if (strncmp (argv[4], "voice", 5) == 0) {
+		/* A DJ line queued before the song: mixed over it, or played as a break. */
+		assert (BarPlayerLoadVoice (&player, getenv ("PIANOBAR_TEST_VOICE"), 7,
+				strcmp (argv[4], "voice-over") == 0));
+		assert (!BarPlayerLoadVoice (&player, argv[1] + strlen (argv[1]), 8, true));
+		assert (player.voiceDoneId == 8 && player.voice == NULL);
+		assert (BarPlayerLoadVoice (&player, getenv ("PIANOBAR_TEST_VOICE"), 9,
+				strcmp (argv[4], "voice-over") == 0));
+	}
 	if (strcmp (argv[4], "queue") == 0) {
 		AVFormatContext *input = NULL;
 		assert (avformat_open_input (&input, argv[1], NULL, NULL) == 0);
@@ -99,6 +108,9 @@ int main (int argc, char **argv) {
 	void *ret;
 	assert (pthread_join (thread, &ret) == 0);
 	assert ((uintptr_t) ret == (uintptr_t) atoi (argv[5]));
+	if (strncmp (argv[4], "voice", 5) == 0) {
+		assert (player.voice == NULL && player.voiceDoneId == 9 && player.duck == 1.0f);
+	}
 	BarCacheDownloadsShutdown (strcmp (argv[4], "shutdown") == 0);
 	BarCacheArtworkWait ();
 	curl_global_cleanup ();

@@ -46,7 +46,7 @@ class Configuration:
     dj_defaults = dict(llm_url='', model='', style='A warm, playful radio DJ. Keep it natural, varied and brief.',
                        theme='A varied mix from my saved music', tts_url='', voice='', tts_ca='', metadata_network=True,
                        set_mode='songs', set_songs=1, set_minutes=15, play_over_music=True,
-                       dj_name='', listener_name='')
+                       dj_name='', listener_name='', talk=False)
     dj_environment = dict(llm_url='PIANOBAR_DJ_URL', model='PIANOBAR_DJ_MODEL', llm_key='PIANOBAR_DJ_KEY',
                           style='PIANOBAR_DJ_STYLE', tts_url='PIANOBAR_TTS_URL', voice='PIANOBAR_TTS_VOICE',
                           tts_key='PIANOBAR_TTS_KEY', tts_ca='PIANOBAR_TTS_CA', metadata_network='PIANOBAR_METADATA_NETWORK')
@@ -208,7 +208,7 @@ class Configuration:
             if not isinstance(dj_changes, dict) or set(dj_changes) - (set(self.dj_defaults) | {'llm_key', 'tts_key', 'clear_llm_key', 'clear_tts_key'}):
                 raise ValueError('Unsupported DJ settings.')
             for key, value in dj_changes.items():
-                if key in ('metadata_network', 'play_over_music', 'clear_llm_key', 'clear_tts_key'):
+                if key in ('metadata_network', 'play_over_music', 'talk', 'clear_llm_key', 'clear_tts_key'):
                     if type(value) is not bool:
                         raise ValueError(f'{key} must be on or off.')
                 elif key in ('set_songs', 'set_minutes'):
@@ -594,7 +594,6 @@ class DJ:
         self.voices_lock = threading.Lock()
         self.voices_cache = None
         self.cache = {}
-        self.announcement = {'id': 0}
         self.station_lock = threading.RLock()
         self.station = dict(enabled=False, theme=settings['theme'], status='off', next=None, error='')
         self.station_generation = 0
@@ -615,16 +614,24 @@ class DJ:
         self.set_options = {k: settings[k] for k in ('set_mode', 'set_songs', 'set_minutes', 'play_over_music')}
         self.selected_set = []
         self.active_set = None
-        self.airtime_holds = {}
-        self.airtime_paused = False
-        self.airtime_confirmed = False
-        self.airtime_song = None
         self.names = {k: settings[k] for k in ('dj_name', 'listener_name')}
+        self.talk = bool(settings.get('talk'))
+        # Spoken lines are synthesized here and mixed into the player's own
+        # output, so every speaker and browser hears the same DJ.
+        self.voice_lock = threading.Lock()
+        self.voice_serial = 0
+        self.voice_state = dict(id=0, status='idle', text='', error='')
+        self.voice_dir = None
+        self.auto_song = None
+        self.auto_done = False
 
     def listening(self):
+        """Somebody can hear the music: host speakers, or an audible browser."""
         state = self.session.state
-        if state.get('paused') or state.get('output') == 'host' or self.session.exited or self.session.restart.is_set() or self.session.setup_required:
+        if state.get('paused') or self.session.exited or self.session.restart.is_set() or self.session.setup_required:
             return False
+        if state.get('output', 'host') != 'browser':
+            return True
         with self.session.audio_lock:
             attached = set(self.session.audio_listeners.values())
         now = time.monotonic()
@@ -634,7 +641,7 @@ class DJ:
 
     def require_listening(self):
         if not self.listening():
-            raise DJNotListening('The DJ is waiting for music to play in a listening browser.')
+            raise DJNotListening('The DJ is waiting for music to play.')
 
     @staticmethod
     def text(value):
@@ -655,7 +662,8 @@ class DJ:
     def public(self):
         context, metadata = self.context()
         return dict(llmReady=bool(self.llm_url and self.model), voiceReady=bool(self.tts_url or self.local_voice),
-                    model=self.model, context=context, metadata=metadata, songKey=self.song_key(context), station=self.station_public())
+                    model=self.model, context=context, metadata=metadata, songKey=self.song_key(context), station=self.station_public(),
+                    voice=self.voice_public())
 
     @staticmethod
     def post(url, message, key='', audio=False, ca_file=None):
@@ -731,14 +739,33 @@ class DJ:
 
     def station_public(self):
         with self.station_lock:
-            return dict(self.station, style=self.style, recent=list(self.recent[-10:]),
-                        settings=dict(self.set_options, **self.names), currentSet=self.active_set)
+            return dict(self.station, style=self.style, talk=self.talk, recent=list(self.recent[-10:]),
+                        settings=dict(self.set_options, **self.names), currentSet=self.active_set,
+                        llmReady=bool(self.llm_url and self.model), voiceReady=bool(self.tts_url or self.local_voice))
 
     def control(self, message):
-        if set(message) - {'enabled', 'theme', 'style'} or type(message.get('enabled')) is not bool:
-            raise ValueError('Supply enabled and optional theme and style.')
+        fields = {'enabled', 'talk', 'stopVoice', 'theme', 'style'}
+        if not message or set(message) - fields or any(
+                type(message[key]) is not bool for key in ('enabled', 'talk', 'stopVoice') if key in message):
+            raise ValueError('Supply enabled, talk, stopVoice, theme or style.')
         theme = self.text(message.get('theme') or self.station['theme'])
         style = self.text(message.get('style') or self.style)
+        if message.get('stopVoice'):
+            self.stop_voice()
+        if 'talk' in message:
+            with self.station_lock:
+                self.talk = message['talk']
+                # Turning the voice on mid-song introduces the current song.
+                self.auto_done = False
+            if not message['talk']:
+                self.stop_voice()
+        if 'enabled' not in message:
+            with self.station_lock:
+                self.station['theme'] = theme
+                self.style = style
+            with self.session.condition:
+                self.session.changed()
+            return self.station_public()
         if message['enabled']:
             if not self.llm_url or not self.model:
                 raise DJUnavailable('Configure an LLM endpoint before starting the DJ station.')
@@ -952,8 +979,25 @@ class DJ:
                     self.intro_event.set()
                 elif not queued and self.active_intro is None:
                     self.intro_target = None
-        if intro:
-            self.announce(dict(text=intro, songKey=self.song_key(song)))
+        if intro and self.talk:
+            with contextlib.suppress(ValueError):
+                self.say(intro, self.song_key(song))
+        self.auto_intro(song)
+
+    def auto_intro(self, song):
+        """Without the DJ station, introduce each new song once it settles."""
+        key = self.song_key(song)
+        with self.station_lock:
+            if key != self.auto_song:
+                self.auto_song, self.auto_done = key, False
+            due = (self.talk and not self.auto_done and not self.station['enabled'] and
+                   bool(self.llm_url and self.model) and song.get('title') and song.get('artist') and
+                   not song.get('paused') and ((song.get('elapsed') or 0) >= 3 or self.session.metadata.current(song).get('status')))
+            if due:
+                self.auto_done = True
+        if due and self.listening():
+            with contextlib.suppress(ValueError, DJUnavailable):
+                self.introduce({})
 
     def run_intros(self):
         while True:
@@ -1022,8 +1066,9 @@ class DJ:
                         if self.intro_target and self.intro_target[0] == token:
                             self.intro_target = None
                     self.session.changed()
-                if announce:
-                    self.announce(dict(text=result['text'], songKey=result['songKey']))
+                if announce and self.talk:
+                    with contextlib.suppress(ValueError):
+                        self.say(result['text'], result['songKey'])
             except DJNotListening:
                 self.intro_event.wait(1)
                 self.intro_event.set()
@@ -1102,89 +1147,125 @@ class DJ:
                     self.station_event.set()
 
     def announce(self, message):
+        """Speak an agent- or listener-supplied line over the current song."""
         if set(message) - {'text', 'songKey'}:
             raise ValueError('Supply text and an optional songKey.')
         text = self.text(message.get('text'))
         with self.session.condition:
             song_key = self.song_key(self.session.state)
-            if message.get('songKey', song_key) != song_key:
-                raise ValueError('That song has changed. Read /api/dj for the current songKey.')
-            self.announcement = dict(id=self.announcement['id'] + 1, text=text, songKey=song_key)
-            self.session.changed()
-            return dict(self.announcement)
+        if message.get('songKey', song_key) != song_key:
+            raise ValueError('That song has changed. Read /api/dj for the current songKey.')
+        return self.say(text, song_key)
 
-    def airtime_public(self):
-        # All airtime state is protected by the session condition.
-        return dict(clients=[hold['client'] for hold in self.airtime_holds.values()], songKey=self.airtime_song)
+    def introduce(self, message):
+        """Write and speak an introduction for the current song in the background."""
+        if set(message) - {'style'}:
+            raise ValueError('Supply an optional DJ style.')
+        style = self.text(message.get('style') or self.style)
+        context, _ = self.context()
+        if not context.get('title') or not context.get('artist'):
+            raise ValueError('Start a song before asking the DJ for an introduction.')
+        if not self.llm_url or not self.model:
+            raise DJUnavailable('Configure an LLM endpoint in Settings so the DJ can write introductions.')
+        song_key = self.song_key(context)
+        serial = self.voice_begin('writing', '', song_key)
+        def run():
+            try:
+                result = self.generate({'style': style})
+                with self.voice_lock:
+                    current = serial == self.voice_serial
+                if current and result['songKey'] == song_key:
+                    self.say(result['text'], song_key)
+            except (DJUnavailable, ValueError, OSError) as error:
+                self.voice_failed(serial, error)
+        threading.Thread(target=run, daemon=True).start()
+        return self.voice_public()
 
-    def cancel_airtime(self):
-        self.airtime_holds.clear()
-        self.airtime_paused = False
-        self.airtime_confirmed = False
-        self.airtime_song = None
+    def voice_public(self):
+        with self.voice_lock:
+            return dict(self.voice_state)
 
-    def release_airtime(self, token):
+    def voice_begin(self, status, text, song_key):
+        with self.voice_lock:
+            self.voice_serial += 1
+            self.voice_state = dict(id=self.voice_serial, status=status, text=text, songKey=song_key, error='')
+            serial = self.voice_serial
         with self.session.condition:
-            if token not in self.airtime_holds:
+            self.session.changed()
+        return serial
+
+    def voice_failed(self, serial, error):
+        with self.voice_lock:
+            if serial != self.voice_serial:
                 return
-            del self.airtime_holds[token]
-            if not self.airtime_holds:
-                resume = self.airtime_paused and self.song_key(self.session.state) == self.airtime_song
-                self.airtime_paused = False
-                self.airtime_confirmed = False
-                self.airtime_song = None
-                if resume:
-                    self.session.condition.wait_for(lambda: not self.session.pending or self.session.exited, timeout=3)
-                    if not self.session.pending and not self.session.exited:
-                        with contextlib.suppress(ValueError, OSError):
-                            self.session.command({'action': 'act_songplay'}, airtime_internal=True)
-                            self.session.condition.wait_for(lambda: (not self.session.pending and not self.session.state.get('paused')) or self.session.exited, timeout=3)
+            self.voice_state.update(status='error', error=str(error))
+        with self.session.condition:
             self.session.changed()
 
-    def airtime(self, message):
-        operation = message.get('operation')
-        if operation == 'end' and set(message) == {'operation', 'token', 'clientId'}:
-            if not isinstance(message['token'], str) or not re.fullmatch(r'[0-9a-f]{32}', message['token']):
-                raise ValueError('Invalid airtime token.')
+    def say(self, text, song_key=None):
+        """Synthesize a line and hand it to the player, which mixes it into every output."""
+        text = self.text(text)
+        if not self.tts_url and not self.local_voice:
+            raise DJUnavailable('Configure a voice endpoint in Settings, or install espeak-ng on the server, to hear the DJ.')
+        serial = self.voice_begin('preparing', text, song_key)
+        threading.Thread(target=self.run_voice, args=(serial, text, song_key), daemon=True).start()
+        return self.voice_public()
+
+    def run_voice(self, serial, text, song_key):
+        try:
+            body, mime = self.speak({'text': text}, wait=True)
+            if self.voice_dir is None:
+                self.voice_dir = tempfile.mkdtemp(prefix='pianobar-dj-')
+            path = Path(self.voice_dir) / f'line-{serial}.{ {"audio/mpeg": "mp3", "audio/ogg": "ogg"}.get(mime, "wav") }'
             with self.session.condition:
-                hold = self.airtime_holds.get(message['token'])
-                if hold and hold['client'] != message['clientId']:
-                    raise ValueError('That airtime belongs to another browser.')
-            self.release_airtime(message['token'])
-            with self.session.condition:
-                return dict(ok=True, paused=bool(self.session.state.get('paused')))
-        if operation != 'begin' or set(message) != {'operation', 'songKey', 'clientId'}:
-            raise ValueError('Supply begin, songKey and clientId, or end, token and clientId.')
-        with self.session.clients.lock:
-            client = self.session.clients.get(message['clientId'])
-            if not client['enabled'] or client['volume'] <= 0 or not client['ready']:
-                raise ValueError('Music must be enabled in a ready, audible browser.')
+                with self.voice_lock:
+                    if serial != self.voice_serial:
+                        return
+                    if song_key and song_key != self.song_key(self.session.state):
+                        # The song moved on while the voice was rendering.
+                        self.voice_state.update(status='idle')
+                        self.session.changed()
+                        return
+                    if self.session.exited or not hasattr(self.session, 'status'):
+                        raise DJUnavailable('The player has stopped.')
+                    path.write_bytes(body)
+                    over = self.set_options.get('play_over_music', True) is not False
+                    self.session.status.send(json.dumps(dict(type='dj_voice', id=str(path), voice=serial, overMusic=over)).encode())
+                    self.voice_state.update(status='on_air')
+                self.session.changed()
+            for old in Path(self.voice_dir).glob('line-*'):
+                if old != path:
+                    with contextlib.suppress(OSError):
+                        old.unlink()
+        except (DJUnavailable, ValueError, OSError) as error:
+            self.voice_failed(serial, error)
+
+    def stop_voice(self):
+        with self.voice_lock:
+            self.voice_serial += 1
+            if self.voice_state['status'] in ('writing', 'preparing', 'on_air'):
+                self.voice_state.update(status='idle')
         with self.session.condition:
-            if self.song_key(self.session.state) != message['songKey'] or self.session.state.get('output') == 'host':
-                raise ValueError('The playing song or browser output changed.')
-            if self.session.state.get('paused') and not self.airtime_holds:
-                raise ValueError('Playback was paused by the listener.')
-            token = secrets.token_hex(16)
-            first = not self.airtime_holds
-            if first:
-                self.session.condition.wait_for(lambda: not self.session.pending or self.session.exited, timeout=3)
-                if self.song_key(self.session.state) != message['songKey']:
-                    raise ValueError('The song changed while waiting for airtime.')
-                self.session.command({'action': 'act_songpause'}, airtime_internal=True)
-                self.airtime_paused = True
-                self.airtime_confirmed = False
-                self.airtime_song = message['songKey']
-            self.airtime_holds[token] = dict(client=message['clientId'])
-            timer = threading.Timer(45, self.release_airtime, args=(token,))
-            timer.daemon = True
-            timer.start()
+            if hasattr(self.session, 'status') and not self.session.exited:
+                with contextlib.suppress(OSError):
+                    self.session.status.send(b'{"type":"dj_voice_stop","id":""}')
             self.session.changed()
-            if first:
-                self.session.condition.wait_for(lambda: (not self.session.pending and self.session.state.get('paused')) or self.session.exited, timeout=3)
-            if not self.session.state.get('paused') or self.session.exited:
-                self.release_airtime(token)
-                raise DJUnavailable('Could not reserve airtime. Try again shortly.')
-            return dict(token=token, airtime=self.airtime_public())
+
+    def on_player_voice(self, state):
+        """The player reports which line it is mixing and which it finished."""
+        with self.voice_lock:
+            if self.voice_state['status'] == 'on_air' and (state.get('djVoiceDone') or 0) >= self.voice_state['id']:
+                self.voice_state['status'] = 'done'
+
+    def close(self):
+        # A restarted player starts its own line numbering; nothing is on air.
+        with self.voice_lock:
+            self.voice_serial += 1
+            if self.voice_state['status'] in ('writing', 'preparing', 'on_air'):
+                self.voice_state.update(status='idle')
+        if self.voice_dir:
+            shutil.rmtree(self.voice_dir, ignore_errors=True)
+            self.voice_dir = None
 
     def voices(self):
         if not self.tts_url:
@@ -1220,7 +1301,7 @@ class DJ:
             self.voices_cache = (time.monotonic() + 60, result)
             return result
 
-    def speak(self, message):
+    def speak(self, message, wait=False):
         if 'text' not in message or set(message) - {'text', 'voice'}:
             raise ValueError('Supply text and an optional voice.')
         text = self.text(message['text'])
@@ -1233,7 +1314,7 @@ class DJ:
                 return self.speech_cache[cache_key]
         if not self.tts_url and not self.local_voice:
             raise DJUnavailable('Configure PIANOBAR_TTS_URL or install espeak-ng on the server to return speech audio. DJ mode can also use this browser’s voice.')
-        if not self.voice_slots.acquire(blocking=False):
+        if not (self.voice_slots.acquire(timeout=40) if wait else self.voice_slots.acquire(blocking=False)):
             raise DJUnavailable('Other speech is being prepared. Try again shortly.')
         try:
             if self.tts_url:
@@ -1372,11 +1453,7 @@ class Session:
             with self.condition:
                 if message.get("type") == "state":
                     self.state = message
-                    if self.dj.airtime_holds:
-                        if self.dj.song_key(message) != self.dj.airtime_song or (self.dj.airtime_confirmed and not message.get('paused') and not self.pending):
-                            self.dj.cancel_airtime()
-                        elif message.get('paused'):
-                            self.dj.airtime_confirmed = True
+                    self.dj.on_player_voice(message)
                     self.metadata.schedule(message)
                 elif message.get("type") == "handled":
                     self.pending = False
@@ -1408,7 +1485,7 @@ class Session:
                     "output": self.output, "pending": self.pending,
                     "exited": self.exited and self.quit_requested,
                     "playerStopped": self.exited, "setupRequired": self.setup_required,
-                    "restarting": self.restart.is_set(), "djAnnouncement": dict(self.dj.announcement), "djStation": self.dj.station_public(), "djAirtime": self.dj.airtime_public()}
+                    "restarting": self.restart.is_set(), "djStation": self.dj.station_public(), "djVoice": self.dj.voice_public()}
 
     def library(self):
         with self.condition:
@@ -1521,7 +1598,7 @@ class Session:
             raise ValueError('Unsupported artwork.')
         return data, mime
 
-    def command(self, message, airtime_internal=False):
+    def command(self, message):
         operations = {'playSaved', 'queueSaved', 'output', 'selectStation', 'action', 'text'}
         if len(set(message) & operations) != 1 or set(message) - operations - {'promptId', 'expectedSongKey'}:
             raise ValueError('Supply exactly one command operation.')
@@ -1563,7 +1640,7 @@ class Session:
                         not any(s["id"] == station_id for s in self.state.get("stations", []))):
                     raise ValueError("That station is unavailable. Reconnect if you are offline.")
                 self.status.send(json.dumps({"type": "select_station", "id": station_id}).encode())
-                self.dj.cancel_airtime()
+                self.dj.stop_voice()
                 self.pending = True
                 self.changed()
                 return
@@ -1586,7 +1663,7 @@ class Session:
                 if self.prompt.get("active") or self.pending:
                     raise ValueError("Finish the current request first.")
                 self.status.send(json.dumps({"type": "play_saved", "id": message["playSaved"]}).encode())
-                self.dj.cancel_airtime()
+                self.dj.stop_voice()
                 self.pending = True
                 self.changed()
                 return
@@ -1597,8 +1674,9 @@ class Session:
                                if a["id"] == message["action"] and a["enabled"]), None)
                 if action is None:
                     raise ValueError("That action is unavailable.")
-                if not airtime_internal and message['action'] in ('act_songpause', 'act_songplay', 'act_songpausetoggle', 'act_songpausetoggle2', 'act_songnext', 'act_offline', 'act_quit'):
-                    self.dj.cancel_airtime()
+                if message['action'] in ('act_songnext', 'act_stationchange', 'act_offline', 'act_quit'):
+                    # A line about the old song must not talk over the next one.
+                    self.dj.stop_voice()
                 data = action["key"].encode("utf-8")
                 if message['action'] == 'act_quit':
                     self.quit_requested = True
@@ -1623,6 +1701,7 @@ class Session:
             self.changed()
 
     def close(self):
+        self.dj.close()
         if self.proc is not None and self.proc.poll() is None:
             self.proc.terminate()
             try:
@@ -1861,7 +1940,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.reply(200, (self.server.assets / name).read_bytes(), mime)
 
     def do_POST(self):
-        if self.path not in ("/api/command", "/api/settings", "/api/dj", "/api/dj/announce", "/api/dj/pick", "/api/dj/control", "/api/dj/airtime", "/api/voice", '/api/clients/register',
+        if self.path not in ("/api/command", "/api/settings", "/api/dj", "/api/dj/announce", "/api/dj/pick", "/api/dj/control", "/api/dj/introduce", "/api/voice", '/api/clients/register',
                              '/api/clients/heartbeat', '/api/clients/update',
                              '/api/clients/route', '/api/clients/unregister'):
             self.reply(404, b"Not found", "text/plain")
@@ -1879,13 +1958,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             message = json.loads(self.rfile.read(length))
             if not isinstance(message, dict):
                 raise ValueError("Invalid request.")
-            if self.path in ('/api/dj', '/api/dj/announce', '/api/dj/pick', '/api/dj/control', '/api/dj/airtime', '/api/voice'):
+            if self.path in ('/api/dj', '/api/dj/announce', '/api/dj/pick', '/api/dj/control', '/api/dj/introduce', '/api/voice'):
                 dj = self.server.session.dj
                 if self.path == '/api/voice':
                     body, mime = dj.speak(message)
                     self.reply(200, body, mime)
                 else:
-                    result = {'/api/dj': dj.generate, '/api/dj/announce': dj.announce, '/api/dj/pick': dj.pick, '/api/dj/control': dj.control, '/api/dj/airtime': dj.airtime}[self.path](message)
+                    result = {'/api/dj': dj.generate, '/api/dj/announce': dj.announce, '/api/dj/pick': dj.pick, '/api/dj/control': dj.control,
+                              '/api/dj/introduce': dj.introduce}[self.path](message)
+                    if self.path == '/api/dj/control' and 'talk' in message and getattr(self.server, 'configuration', None):
+                        # Remember whether the DJ talks across restarts.
+                        self.server.configuration.save({'settings': {'dj': {'talk': message['talk']}}})
                     self.reply(200, json.dumps(result).encode())
                 return
             if self.path.startswith('/api/clients/'):
@@ -1907,9 +1990,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         raise ValueError('The player is restarting. Try again in a moment.')
                     saved = self.server.configuration.save(message)
                     # Voice choice is safe to apply without interrupting playback.
-                    if 'voice' in message.get('settings', {}).get('dj', {}):
+                    dj_changes = message.get('settings', {}).get('dj', {})
+                    if 'voice' in dj_changes:
                         session.dj.voice = saved['dj']['voice']
                     with session.dj.station_lock:
+                        if 'style' in dj_changes and 'PIANOBAR_DJ_STYLE' not in os.environ:
+                            session.dj.style = saved['dj']['style']
+                        if 'theme' in dj_changes:
+                            session.dj.station['theme'] = saved['dj']['theme']
+                        if 'talk' in dj_changes:
+                            session.dj.talk = saved['dj']['talk']
                         for key in session.dj.set_options:
                             session.dj.set_options[key] = saved['dj'][key]
                         names = {key: saved['dj'][key] for key in session.dj.names}

@@ -46,6 +46,7 @@ THE SOFTWARE.
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <time.h>
+#include <stdlib.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavutil/avutil.h>
@@ -109,6 +110,12 @@ void BarPlayerInit (player_t * const p, const BarSettings_t * const settings) {
 			fcntl (p->audioFd, F_SETFD, FD_CLOEXEC);
 		}
 	}
+	p->voice = NULL;
+	p->voiceFrames = p->voicePos = 0;
+	p->voiceRate = p->voiceChannels = p->voiceId = p->voiceDoneId = 0;
+	p->voiceOverMusic = true;
+	p->duck = 1.0f;
+	p->outRate = p->outChannels = 0;
 	const char *output = getenv ("PIANOBAR_OUTPUT");
 	if (p->audioFd >= 0 && output != NULL) {
 		if (strcmp (output, "browser") == 0) { p->outputMode = 2; }
@@ -117,6 +124,8 @@ void BarPlayerInit (player_t * const p, const BarSettings_t * const settings) {
 }
 
 void BarPlayerDestroy (player_t * const p) {
+	free (p->voice);
+	p->voice = NULL;
 	pthread_cond_destroy (&p->cond);
 	pthread_mutex_destroy (&p->lock);
 	pthread_cond_destroy (&p->aoplayCond);
@@ -648,17 +657,293 @@ static int64_t monotonicNs (void) {
 	return (int64_t) now.tv_sec * 1000000000 + now.tv_nsec;
 }
 
-static void browserAudio (player_t *player, const AVFrame *frame) {
+static void browserAudio (player_t *player, const int16_t *data, int frames,
+		int rate, int channels) {
 	if (player->audioFd < 0) { return; }
 	const uint16_t endian = 1;
-	uint32_t header[] = {htonl (frame->nb_samples * frame->ch_layout.nb_channels * 2),
-		htonl (frame->sample_rate), htonl (frame->ch_layout.nb_channels),
+	uint32_t header[] = {htonl (frames * channels * 2), htonl (rate), htonl (channels),
 		htonl (*(const uint8_t *) &endian), htonl (player->audioEpoch)};
 	struct iovec parts[] = {{header, sizeof (header)},
-		{frame->data[0], frame->nb_samples * frame->ch_layout.nb_channels * 2}};
+		{(void *) data, frames * channels * 2}};
 	struct msghdr message = {.msg_iov = parts, .msg_iovlen = 2};
 	/* One datagram per frame. A slow browser must never stall local playback. */
 	sendmsg (player->audioFd, &message, MSG_DONTWAIT | MSG_NOSIGNAL);
+}
+
+/*	Play interleaved S16 samples on the selected outputs. Without a host
+ *	device, pace output in real time so browsers and the DJ stay in sync.
+ *	Returns false when the host device failed.
+ */
+static bool emit (player_t * const player, const int16_t *data, int frames,
+		int rate, int channels, int64_t *deadline) {
+	pthread_mutex_lock (&player->lock);
+	unsigned int output = player->outputMode;
+	pthread_mutex_unlock (&player->lock);
+	bool outputOk = true;
+	if ((output & 1) != 0 && player->aoDev == NULL) {
+		outputOk = openDevice (player);
+		pthread_mutex_lock (&player->lock);
+		output = player->outputMode;
+		pthread_mutex_unlock (&player->lock);
+	}
+	if ((output & 1) == 0 && player->aoDev != NULL) { ao_close (player->aoDev); player->aoDev = NULL; }
+	if (outputOk && player->aoDev != NULL) {
+		outputOk = ao_play (player->aoDev, (char *) data, frames * channels * 2) != 0;
+		*deadline = monotonicNs ();
+	} else if (outputOk) {
+		const int64_t now = monotonicNs ();
+		if (*deadline < now - 250000000) { *deadline = now; }
+		*deadline += (int64_t) frames * 1000000000 / rate;
+		const struct timespec until = {.tv_sec = *deadline / 1000000000, .tv_nsec = *deadline % 1000000000};
+		clock_nanosleep (CLOCK_MONOTONIC, TIMER_ABSTIME, &until, NULL);
+	}
+	if ((output & 2) != 0 && outputOk) { browserAudio (player, data, frames, rate, channels); }
+	return outputOk;
+}
+
+/* Music gain while the DJ talks over it, and the ramp time to get there. */
+#define VOICE_DUCK 0.25f
+#define VOICE_RAMP_SECS 0.3f
+/* Longest DJ clip accepted, in seconds. */
+#define VOICE_MAX_SECS 120
+
+/*	Must hold player->lock */
+static void finishVoice (player_t * const player) {
+	free (player->voice);
+	player->voice = NULL;
+	player->voiceFrames = player->voicePos = 0;
+	player->voiceDoneId = player->voiceId;
+}
+
+static float voiceVolume (const player_t * const player) {
+	return powf (10.0f, player->settings->volume / 20.0f);
+}
+
+static int16_t clip16 (float v) {
+	return v > INT16_MAX ? INT16_MAX : v < INT16_MIN ? INT16_MIN : (int16_t) v;
+}
+
+/*	Mix the DJ voice into a music frame, ducking the music around it.
+ *	Must hold player->lock
+ */
+static void mixVoice (player_t * const player, int16_t *data, int frames,
+		int rate, int channels) {
+	if (player->voice != NULL && (player->voiceRate != (unsigned int) rate ||
+			player->voiceChannels != (unsigned int) channels)) {
+		/* The song changed format mid-sentence; drop the line. */
+		finishVoice (player);
+	}
+	const bool talking = player->voice != NULL && player->voiceOverMusic;
+	if (!talking && player->duck >= 1.0f) { return; }
+	const float step = 1.0f / (rate * VOICE_RAMP_SECS), volume = voiceVolume (player);
+	for (int i = 0; i < frames; ++i) {
+		const float target = talking && player->voicePos < player->voiceFrames ? VOICE_DUCK : 1.0f;
+		if (player->duck > target) {
+			player->duck = fmaxf (target, player->duck - step);
+		} else if (player->duck < target) {
+			player->duck = fminf (target, player->duck + step);
+		}
+		/* Dip the music first, then talk, like a DJ riding the fader. */
+		const bool speaking = target < 1.0f && player->duck <= target;
+		for (int c = 0; c < channels; ++c) {
+			float v = data[i * channels + c] * player->duck;
+			if (speaking) { v += player->voice[player->voicePos * channels + c] * volume; }
+			data[i * channels + c] = clip16 (v);
+		}
+		if (speaking) { ++player->voicePos; }
+	}
+	if (talking && player->voicePos >= player->voiceFrames) { finishVoice (player); }
+}
+
+/*	When the DJ holds the music for a line, play the voice alone. Returns
+ *	true while the voice owns the output; *ok is false if output failed.
+ */
+static bool voiceBreak (player_t * const player, int64_t *deadline, bool *ok) {
+	static int16_t chunk[1024 * 8];
+	pthread_mutex_lock (&player->lock);
+	if (player->voice == NULL || player->voiceOverMusic) {
+		pthread_mutex_unlock (&player->lock);
+		return false;
+	}
+	while (player->doPause && !player->doQuit) {
+		pthread_cond_wait (&player->cond, &player->lock);
+	}
+	if (player->voice == NULL || player->doQuit) {
+		pthread_mutex_unlock (&player->lock);
+		return player->doQuit;
+	}
+	const int channels = player->voiceChannels, rate = player->voiceRate;
+	if (rate != getSampleRate (player) || channels != player->st->codecpar->ch_layout.nb_channels) {
+		/* Decoded for another song’s format; the device would play it at the wrong speed. */
+		finishVoice (player);
+		pthread_mutex_unlock (&player->lock);
+		return false;
+	}
+	int frames = sizeof (chunk) / sizeof (*chunk) / channels;
+	if ((size_t) frames > player->voiceFrames - player->voicePos) {
+		frames = player->voiceFrames - player->voicePos;
+	}
+	const float volume = voiceVolume (player);
+	for (int i = 0; i < frames * channels; ++i) {
+		chunk[i] = clip16 (player->voice[player->voicePos * channels + i] * volume);
+	}
+	player->voicePos += frames;
+	if (player->voicePos >= player->voiceFrames) { finishVoice (player); }
+	pthread_mutex_unlock (&player->lock);
+	*ok = emit (player, chunk, frames, rate, channels, deadline);
+	return true;
+}
+
+/*	Append every frame waiting in the voice filter sink. */
+static bool drainVoice (AVFilterContext *sink, AVFrame *out, int16_t **samples,
+		size_t *count, size_t *capacity, unsigned int channels, unsigned int rate) {
+	while (av_buffersink_get_frame (sink, out) >= 0) {
+		const size_t need = *count + out->nb_samples;
+		if (need > (size_t) rate * VOICE_MAX_SECS) { av_frame_unref (out); return false; }
+		if (need > *capacity) {
+			*capacity = need * 2;
+			int16_t *grown = realloc (*samples, *capacity * channels * sizeof (**samples));
+			if (grown == NULL) { av_frame_unref (out); return false; }
+			*samples = grown;
+		}
+		memcpy (*samples + *count * channels, out->data[0], out->nb_samples * channels * sizeof (**samples));
+		*count = need;
+		av_frame_unref (out);
+	}
+	return true;
+}
+
+/*	Decode a DJ clip into interleaved S16 at the music’s output format. */
+static int16_t *decodeVoice (const char *path, unsigned int rate,
+		unsigned int channels, size_t *frames) {
+	AVFormatContext *fctx = NULL;
+	AVCodecContext *cctx = NULL;
+	AVFilterGraph *graph = NULL;
+	AVFilterContext *src = NULL, *fmt = NULL, *sink = NULL;
+	AVPacket *pkt = av_packet_alloc ();
+	AVFrame *frame = av_frame_alloc (), *out = av_frame_alloc ();
+	int16_t *samples = NULL;
+	size_t count = 0, capacity = 0;
+	bool ok = false;
+	const AVCodec *codec = NULL;
+	int stream = -1;
+	char layout[128], args[512];
+
+	if (pkt == NULL || frame == NULL || out == NULL ||
+			avformat_open_input (&fctx, path, NULL, NULL) < 0 ||
+			avformat_find_stream_info (fctx, NULL) < 0 ||
+			(stream = av_find_best_stream (fctx, AVMEDIA_TYPE_AUDIO, -1, -1, &codec, 0)) < 0 ||
+			(cctx = avcodec_alloc_context3 (codec)) == NULL ||
+			avcodec_parameters_to_context (cctx, fctx->streams[stream]->codecpar) < 0 ||
+			avcodec_open2 (cctx, codec, NULL) < 0 ||
+			(graph = avfilter_graph_alloc ()) == NULL) {
+		goto done;
+	}
+	if (cctx->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC) {
+		const int n = cctx->ch_layout.nb_channels;
+		av_channel_layout_uninit (&cctx->ch_layout);
+		av_channel_layout_default (&cctx->ch_layout, n);
+	}
+	av_channel_layout_describe (&cctx->ch_layout, layout, sizeof (layout));
+	snprintf (args, sizeof (args), "time_base=1/%d:sample_rate=%d:sample_fmt=%s:channel_layout=%s",
+			cctx->sample_rate, cctx->sample_rate, av_get_sample_fmt_name (cctx->sample_fmt), layout);
+	AVChannelLayout target;
+	av_channel_layout_default (&target, channels);
+	av_channel_layout_describe (&target, layout, sizeof (layout));
+	av_channel_layout_uninit (&target);
+	if (avfilter_graph_create_filter (&src, avfilter_get_by_name ("abuffer"), "src", args, NULL, graph) < 0) {
+		goto done;
+	}
+	snprintf (args, sizeof (args), "sample_fmts=s16:sample_rates=%u:channel_layouts=%s", rate, layout);
+	if (avfilter_graph_create_filter (&fmt, avfilter_get_by_name ("aformat"), "fmt", args, NULL, graph) < 0 ||
+			avfilter_graph_create_filter (&sink, avfilter_get_by_name ("abuffersink"), "sink", NULL, NULL, graph) < 0 ||
+			avfilter_link (src, 0, fmt, 0) != 0 || avfilter_link (fmt, 0, sink, 0) != 0 ||
+			avfilter_graph_config (graph, NULL) < 0) {
+		goto done;
+	}
+	bool flushed = false;
+	while (!flushed) {
+		if (av_read_frame (fctx, pkt) < 0) {
+			avcodec_send_packet (cctx, NULL);
+			flushed = true;
+		} else {
+			const bool ours = pkt->stream_index == stream;
+			if (ours && avcodec_send_packet (cctx, pkt) < 0) { av_packet_unref (pkt); goto done; }
+			av_packet_unref (pkt);
+			if (!ours) { continue; }
+		}
+		while (avcodec_receive_frame (cctx, frame) == 0) {
+			if (frame->pts == (int64_t) AV_NOPTS_VALUE) { frame->pts = 0; }
+			if (av_buffersrc_add_frame (src, frame) < 0 ||
+					!drainVoice (sink, out, &samples, &count, &capacity, channels, rate)) {
+				goto done;
+			}
+		}
+	}
+	if (av_buffersrc_add_frame (src, NULL) < 0 ||
+			!drainVoice (sink, out, &samples, &count, &capacity, channels, rate)) {
+		goto done;
+	}
+	ok = count > 0;
+
+done:
+	if (!ok) { free (samples); samples = NULL; count = 0; }
+	*frames = count;
+	avfilter_graph_free (&graph);
+	avcodec_free_context (&cctx);
+	avformat_close_input (&fctx);
+	av_frame_free (&frame);
+	av_frame_free (&out);
+	av_packet_free (&pkt);
+	return samples;
+}
+
+/*	Queue a DJ line. It replaces any line still playing. */
+bool BarPlayerLoadVoice (player_t * const player, const char *path,
+		unsigned int id, bool overMusic) {
+	pthread_mutex_lock (&player->lock);
+	unsigned int rate = player->outRate, channels = player->outChannels;
+	pthread_mutex_unlock (&player->lock);
+	if (rate == 0) {
+		rate = player->settings->sampleRate == 0 ? 44100 : player->settings->sampleRate;
+	}
+	if (channels == 0) { channels = 2; }
+	size_t frames = 0;
+	int16_t *samples = decodeVoice (path, rate, channels, &frames);
+	pthread_mutex_lock (&player->lock);
+	free (player->voice);
+	player->voice = samples;
+	player->voiceFrames = frames;
+	player->voicePos = 0;
+	player->voiceRate = rate;
+	player->voiceChannels = channels;
+	player->voiceOverMusic = overMusic;
+	player->voiceId = id;
+	if (samples == NULL) { player->voiceDoneId = id; }
+	pthread_mutex_unlock (&player->lock);
+	if (samples == NULL) {
+		BarUiMsg (player->settings, MSG_ERR, "Could not decode the DJ voice.\n");
+	}
+	return samples != NULL;
+}
+
+void BarPlayerStopVoice (player_t * const player) {
+	pthread_mutex_lock (&player->lock);
+	if (player->voice != NULL) { finishVoice (player); }
+	pthread_mutex_unlock (&player->lock);
+}
+
+static void outputFailed (player_t * const player) {
+	BarUiMsg (player->settings, MSG_ERR, "Audio output failed; stopping playback.\n");
+	pthread_mutex_lock (&player->lock);
+	player->outputError = true;
+	player->doQuit = true;
+	player->doPause = false;
+	pthread_cond_broadcast (&player->cond);
+	pthread_mutex_unlock (&player->lock);
+	pthread_mutex_lock (&player->aoplayLock);
+	pthread_cond_broadcast (&player->aoplayCond);
+	pthread_mutex_unlock (&player->aoplayLock);
 }
 
 void *BarAoPlayThread (void *data) {
@@ -675,6 +960,11 @@ void *BarAoPlayThread (void *data) {
 			timeBaseSt = av_q2d (player->st->time_base);
 	int64_t deadline = monotonicNs ();
 	while (!shouldQuit(player)) {
+		bool outputOk = true;
+		if (voiceBreak (player, &deadline, &outputOk)) {
+			if (!outputOk) { outputFailed (player); break; }
+			continue;
+		}
 		pthread_mutex_lock (&player->aoplayLock);
 		ret = av_buffersink_get_frame (player->fbufsink, filteredFrame);
 		if (ret == AVERROR_EOF || shouldQuit (player)) {
@@ -694,41 +984,19 @@ void *BarAoPlayThread (void *data) {
 		pthread_mutex_unlock (&player->aoplayLock);
 
 		const int numChannels = filteredFrame->ch_layout.nb_channels;
-		const int bps = av_get_bytes_per_sample (filteredFrame->format);
 		pthread_mutex_lock (&player->lock);
-		unsigned int output = player->outputMode;
+		player->outRate = filteredFrame->sample_rate;
+		player->outChannels = numChannels;
+		if ((player->voice != NULL || player->duck < 1.0f) &&
+				av_frame_make_writable (filteredFrame) >= 0) {
+			mixVoice (player, (int16_t *) filteredFrame->data[0],
+					filteredFrame->nb_samples, filteredFrame->sample_rate, numChannels);
+		}
 		pthread_mutex_unlock (&player->lock);
-		bool outputOk = true;
-		if ((output & 1) != 0 && player->aoDev == NULL) {
-			outputOk = openDevice (player);
-			pthread_mutex_lock (&player->lock);
-			output = player->outputMode;
-			pthread_mutex_unlock (&player->lock);
-		}
-		if ((output & 1) == 0 && player->aoDev != NULL) { ao_close (player->aoDev); player->aoDev = NULL; }
-		if (outputOk && player->aoDev != NULL) {
-			outputOk = ao_play (player->aoDev, (char *) filteredFrame->data[0],
-					filteredFrame->nb_samples * numChannels * bps) != 0;
-			deadline = monotonicNs ();
-		} else if (outputOk) {
-			const int64_t now = monotonicNs ();
-			if (deadline < now - 250000000) { deadline = now; }
-			deadline += (int64_t) filteredFrame->nb_samples * 1000000000 / filteredFrame->sample_rate;
-			const struct timespec until = {.tv_sec = deadline / 1000000000, .tv_nsec = deadline % 1000000000};
-			clock_nanosleep (CLOCK_MONOTONIC, TIMER_ABSTIME, &until, NULL);
-		}
-		if ((output & 2) != 0 && outputOk) { browserAudio (player, filteredFrame); }
+		outputOk = emit (player, (const int16_t *) filteredFrame->data[0],
+				filteredFrame->nb_samples, filteredFrame->sample_rate, numChannels, &deadline);
 		if (!outputOk) {
-			BarUiMsg (player->settings, MSG_ERR, "Audio output failed; stopping playback.\n");
-			pthread_mutex_lock (&player->lock);
-			player->outputError = true;
-			player->doQuit = true;
-			player->doPause = false;
-			pthread_cond_broadcast (&player->cond);
-			pthread_mutex_unlock (&player->lock);
-			pthread_mutex_lock (&player->aoplayLock);
-			pthread_cond_broadcast (&player->aoplayCond);
-			pthread_mutex_unlock (&player->aoplayLock);
+			outputFailed (player);
 			break;
 		}
 

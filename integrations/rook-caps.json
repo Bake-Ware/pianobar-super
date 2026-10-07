@@ -364,7 +364,7 @@
     "args": [
       "text"
     ],
-    "description": "Speak a DJ line through the Kaiju voice endpoint to browsers with DJ introductions enabled. At most 700 characters.",
+    "description": "Speak a DJ line through the Kaiju voice endpoint. The player mixes it over the music on Host speakers and every listening browser. At most 700 characters.",
     "timeout": 65
   },
   {
@@ -373,7 +373,7 @@
     "args": [
       "json"
     ],
-    "description": "Start/stop the cached-song LLM station. JSON: enabled boolean, optional theme and style.",
+    "description": "Steer the DJ. JSON, any of: enabled (cached-song station on/off), talk (spoken intros on/off), stopVoice (cut the current line), theme, style.",
     "timeout": 65
   },
   {

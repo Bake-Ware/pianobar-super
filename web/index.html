@@ -43,19 +43,28 @@
         <div class="transport"><div class="transport-main"><button class="icon-button" data-action="act_songlove" aria-label="Love song" title="Love song" disabled>♡</button><button id="play-button" class="play-button" data-action="act_songpausetoggle" aria-label="Pause playback" disabled>Ⅱ</button><button class="icon-button skip" data-action="act_songnext" aria-label="Next song" title="Next song" disabled><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16l11-8zM18 4h3v16h-3z"/></svg></button></div><div class="volume"><button data-action="act_voldown" aria-label="Decrease volume" disabled>−</button><span id="volume">0 dB</span><button data-action="act_volup" aria-label="Increase volume" disabled>+</button></div></div>
         <div class="track-actions"><button data-action="act_songban" disabled>⊘ Ban track</button><button data-action="act_songtired" disabled>◷ Take a break</button><button data-action="act_bookmark" disabled>＋ Bookmark</button></div>
         <div class="audio-output"><label for="audio-output">Audio output</label><select id="audio-output"><option value="host">Host</option><option value="browser">Browser</option><option value="both">Both</option></select><button id="listen-button" type="button">Listen here</button><label for="browser-name">This browser</label><input id="browser-name" maxlength="80" placeholder="Name this browser" aria-label="This browser name"><span id="audio-status" role="status"></span></div>
-        <details id="dj-controls" class="dj-controls"><summary>DJ mode</summary>
-          <label class="setting-check"><input id="dj-station-enabled" type="checkbox">Let the LLM pick songs from my local cache</label>
-          <label for="dj-theme">Station theme</label><input id="dj-theme" maxlength="450" value="A varied mix from my saved music">
-          <p id="dj-station-status" role="status">Cached-song DJ station is off.</p>
-          <label class="setting-check"><input id="dj-enabled" type="checkbox">Hear DJ introductions in this browser</label>
-          <label for="dj-style">DJ personality</label><input id="dj-style" maxlength="450" value="A warm, playful radio DJ. Keep it natural, varied and brief.">
-          <p class="settings-hint">Voice plays here. Music playing in this browser quiets while the DJ speaks.</p>
-          <p id="dj-status" role="status">DJ mode is off.</p><p id="dj-line" hidden></p>
-          <div class="dj-buttons"><button id="dj-introduce" type="button" disabled>Introduce this song</button><button id="dj-stop" type="button" disabled>Stop voice</button></div>
-          <form id="dj-line-form"><label for="dj-text">Give the DJ a line</label><div><input id="dj-text" maxlength="700" placeholder="Coming at ya with some London punk…" required><button id="dj-say" type="submit" disabled>Speak</button></div></form>
-        </details>
         <section class="utility"><details><summary>More controls <span>+</span></summary><div id="more-actions" class="more-actions"></div></details></section>
         </div>
+      </div>
+    </section>
+    <section id="dj-booth" data-views="player" class="dj-booth" data-state="off" aria-labelledby="dj-name">
+      <div class="dj-top">
+        <div class="dj-ident"><span class="dj-light" aria-hidden="true"></span><div><p class="dj-eyebrow">DJ BOOTH</p><h2 id="dj-name">Your DJ</h2></div></div>
+        <p id="dj-state" class="dj-state" role="status">Off</p>
+        <div class="dj-switches">
+          <label class="dj-switch"><input id="dj-talk" type="checkbox" role="switch"><span class="dj-track" aria-hidden="true"></span>Talks</label>
+          <label class="dj-switch"><input id="dj-station-enabled" type="checkbox" role="switch"><span class="dj-track" aria-hidden="true"></span>Picks the music</label>
+        </div>
+      </div>
+      <div id="dj-mic" class="dj-mic" hidden><blockquote id="dj-line" aria-live="polite"></blockquote><button id="dj-stop" class="dj-button" type="button" hidden>■ Stop</button></div>
+      <p id="dj-notice" class="dj-notice" hidden><span id="dj-notice-text"></span> <a id="dj-notice-link" href="#settings">Open DJ settings</a></p>
+      <div class="dj-body">
+        <div class="dj-desk">
+          <form id="dj-line-form" class="dj-form"><label for="dj-text">Give the DJ a line</label><div class="dj-field"><input id="dj-text" maxlength="700" placeholder="Coming at ya with some London punk…" autocomplete="off" required><button id="dj-say" class="dj-button" type="submit">Speak</button></div></form>
+          <button id="dj-introduce" class="dj-button dj-wide" type="button">Introduce this song</button>
+          <form id="dj-theme-form" class="dj-form"><label for="dj-theme">Station theme</label><div class="dj-field"><input id="dj-theme" maxlength="450" placeholder="A varied mix from my saved music" autocomplete="off"><button class="dj-button" type="submit">Set</button></div></form>
+        </div>
+        <div class="dj-lineup"><p id="dj-lineup-title" class="dj-eyebrow">Up next</p><ol id="dj-queue" hidden></ol><p id="dj-lineup-empty" class="dj-empty"></p></div>
       </div>
     </section>
     <section id="shortcut-legend" data-views="player" class="shortcut-legend" aria-labelledby="shortcuts-title">
@@ -100,7 +109,7 @@
           <label class="setting-check"><input id="setting-offline" type="checkbox">Start in offline mode</label>
         </div></fieldset>
         <fieldset><legend>LLM DJ &amp; voice</legend>
-          <p class="settings-hint">The DJ chooses from your saved songs. Save settings applies voice selection immediately. Save &amp; restart player applies provider and metadata changes; enable the DJ station in Now playing.</p>
+          <p class="settings-hint">The DJ talks through the player itself, so it is heard on Host speakers and every listening browser. Turn it on in the DJ booth under Now playing. Save settings applies voice, names, personality and set sizing immediately; Save &amp; restart player applies provider and metadata changes.</p>
           <div class="settings-grid">
             <label>LLM endpoint URL<input id="setting-dj-llm_url" type="url" maxlength="450" placeholder="http://your-server:1234/v1/chat/completions"></label>
             <label>LLM model<input id="setting-dj-model" maxlength="450" placeholder="Model advertised by your server"></label>
@@ -117,8 +126,8 @@
             <label>Voice bearer key<input id="setting-dj-tts_key" type="password" autocomplete="new-password" maxlength="450" placeholder="Leave blank to keep saved key"></label>
             <label>Voice HTTPS certificate file<input id="setting-dj-tts_ca" maxlength="450" placeholder="Optional absolute path on this server"></label>
           </div>
-          <div class="settings-checks"><label class="setting-check"><input id="setting-dj-play_over_music" type="checkbox" checked>Play DJ intros over music</label></div>
-          <p class="settings-hint">The DJ only chooses music and prepares introductions while a browser is playing music. Names apply when saved. One introduction summarizes each set. Timed sets use whole songs and aim for the requested duration, up to 30 songs. Uncheck Play DJ intros over music to reserve airtime before the music resumes. Airtime pauses the shared player. Set sizing applies to the next selection when saved; intro playback applies immediately.</p>
+          <div class="settings-checks"><label class="setting-check"><input id="setting-dj-play_over_music" type="checkbox" checked>Talk over the music (the music dips while the DJ speaks)</label></div>
+          <p class="settings-hint">Unchecked, the music holds while the DJ speaks and picks up where it left off. The DJ only writes and picks music while someone can hear it. One introduction summarizes each set; timed sets use whole songs, up to 30.</p>
           <div class="settings-buttons"><button id="sample-dj-voice" type="button">Sample voice</button><button id="refresh-dj-voices" type="button">Refresh voices</button></div>
           <p id="voice-sample-status" class="settings-hint" role="status">Preview the selected voice using the active voice server, before saving.</p>
           <p id="dj-voices-status" class="settings-hint" role="status">Voices come from the active voice server. Save &amp; restart player after changing the endpoint.</p>
@@ -132,7 +141,7 @@
           <label>Web access password<input id="setting-web-password" type="password" autocomplete="new-password" maxlength="450"></label>
         </div><p id="web-password-note" class="settings-hint"></p><p class="settings-hint">Web address and password changes take effect after restarting pianobar. Network access uses HTTP; use it on a trusted network.</p></fieldset>
         <div class="settings-buttons"><button id="save-settings" type="submit" value="save">Save settings</button><button id="apply-settings" type="submit" value="apply">Save &amp; restart player</button></div>
-        <p id="settings-status" role="status">Voice, set sizing and intro playback apply on save. Other player changes require a restart, which interrupts playback.</p>
+        <p id="settings-status" role="status">DJ voice, names, personality and set sizing apply on save. Other player changes require a restart, which interrupts playback.</p>
       </form>
     </section>
     <footer><span id="cache-note">Songs save automatically when loaded.</span><span>Good music. Your pace.</span></footer>

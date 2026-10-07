@@ -93,9 +93,7 @@ window.addEventListener('storage', event => {
   }
 });
 let coverSource = '', coverAttempt = 0, coverRetry, coverCandidates = [], coverCandidate = 0;
-let djEnabled = false, djSpeaking = false, djInfo = {}, djTrack = '', djGeneratedTrack = '';
-let djAnnouncement = 0, djGeneration = 0, djController, djAudio, djObjectURL, djUtterance;
-let djAirtimeToken = null, djAirtimePending = false, djAirtimeSong = null, djAirtimeReleasing = false;
+let djBusy = false;
 let audioBufferSeconds = .9;
 const audioStats = {underruns: 0, resyncs: 0};
 let settingsLoaded = false, settingsBusy = false, setupShown = false;
@@ -138,15 +136,13 @@ async function pollBrowser() {
   try {
     await registerBrowser();
     const page = await browserRequest('heartbeat', {id: browserId, status: browserPlaybackStatus(),
-      ready: audioContext?.state === 'running' || djHasAirtime()});
+      ready: audioContext?.state === 'running'});
     browserLastSeen = performance.now();
     if (mutation !== browserMutation) return;
     browserDesired = page.enabled;
     browserVolume = page.volume;
     if (document.activeElement !== $('browser-name')) $('browser-name').value = page.name;
-    if (audioGain) audioGain.gain.value = browserVolume * (djSpeaking ? .2 : 1);
-    if (djAudio) djAudio.volume = browserVolume;
-    if (!browserDesired || browserVolume === 0) stopDJ();
+    if (audioGain) audioGain.gain.value = browserVolume;
     if (autoListenPending && revision >= 0 && ['host', 'browser', 'both'].includes(snapshot.state.output) &&
         !snapshot.playerStopped && !snapshot.setupRequired &&
         !snapshot.restarting && !snapshot.exited && !snapshot.pending && !snapshot.prompt.active && !sending) {
@@ -534,7 +530,7 @@ function render(data) {
   if (desiredOutput === state.output) desiredOutput = null;
   $('audio-output').value = desiredOutput || state.output || 'host';
   if (data.exited || data.playerStopped || data.restarting || (!desiredOutput && state.output === 'host')) stopListening();
-  if (state.paused && !djKeepsMusic(data)) clearAudioQueue();
+  if (state.paused) clearAudioQueue();
   $('elapsed').textContent = time(state.elapsed);
   $('duration').textContent = time(state.duration);
   $('progress').max = Math.max(1, state.duration || 0);
@@ -567,9 +563,6 @@ function render(data) {
   updateDisabled();
 }
 function clearAudioQueue() {
-  const retryIntro = !!djController && !djSpeaking && snapshot.djAnnouncement?.songKey === snapshot.state.songKey;
-  if (djController || djSpeaking) stopDJ();
-  if (retryIntro) djAnnouncement = Math.max(0, snapshot.djAnnouncement.id - 1);
   for (const source of audioSources) { try { source.stop(); } catch (_) {} }
   audioSources.clear();
   audioNextTime = 0;
@@ -584,12 +577,10 @@ function stopListening() {
   browserStatus = 'idle';
   $('listen-button').textContent = 'Listen here';
   $('audio-status').textContent = '';
-  stopDJ();
   if (browserId) browserRequest('heartbeat', {id: browserId, status: 'idle', ready: false}).catch(() => {});
-  renderDJ(snapshot);
 }
 function queueAudio(data, rate, channels, little, epoch) {
-  if (!audioContext || (snapshot.state.paused && !djKeepsMusic(snapshot))) return;
+  if (!audioContext || snapshot.state.paused) return;
   if (epoch !== audioEpoch) { clearAudioQueue(); audioEpoch = epoch; }
   const frames = data.byteLength / (channels * 2);
   const buffer = audioContext.createBuffer(channels, frames, rate);
@@ -622,13 +613,12 @@ function queueAudio(data, rate, channels, little, epoch) {
   source.onended = () => {
     audioSources.delete(source);
     source.disconnect();
-    if (!audioSources.size && audioController) { browserStatus = 'waiting'; renderDJ(snapshot); }
+    if (!audioSources.size && audioController) browserStatus = 'waiting';
   };
   source.start(audioNextTime);
   audioNextTime += buffer.duration;
   $('audio-status').textContent = 'Playing in this browser';
   browserStatus = 'playing';
-  renderDJ(snapshot);
 }
 async function startListening() {
   if (audioController) return;
@@ -638,9 +628,8 @@ async function startListening() {
   if (!audioContext || audioContext.state === 'closed') {
     audioContext = new Context({latencyHint: 'playback'});
     audioGain = audioContext.createGain();
-    audioGain.gain.value = browserVolume * (djSpeaking ? .2 : 1);
+    audioGain.gain.value = browserVolume;
     audioGain.connect(audioContext.destination);
-    audioContext.addEventListener('statechange', () => { if (audioContext.state !== 'running' && !djKeepsMusic(snapshot)) stopDJ(); });
   }
   // A remote request must not hang indefinitely on the browser's autoplay gate.
   await Promise.race([audioContext.resume(), new Promise(resolve => setTimeout(resolve, 500))]);
@@ -726,57 +715,6 @@ window.addEventListener('pageshow', event => {
   pollBrowser();
 });
 
-function djHasAirtime(data = snapshot) {
-  return !!(djAirtimeToken || djAirtimePending) && djAirtimeSong === data.state.songKey &&
-    !!data.djAirtime?.clients.includes(browserId);
-}
-function djKeepsMusic(data) {
-  return djHasAirtime(data) || (djAirtimeReleasing && djAirtimeSong === data.state.songKey);
-}
-async function releaseDJAirtime() {
-  const token = djAirtimeToken, clientId = browserId;
-  djAirtimeToken = null;
-  djAirtimePending = false;
-  if (!token) return;
-  djAirtimeReleasing = true;
-  try {
-    const result = await djJSON('/api/dj/airtime', {operation: 'end', token, clientId});
-    if (djAirtimeSong === snapshot.state.songKey && typeof result.paused === 'boolean') snapshot.state.paused = result.paused;
-  } catch (_) { /* The server also releases abandoned airtime after 45 seconds. */ }
-  finally {
-    if (browserDesired && audioContext?.state === 'suspended') await audioContext.resume().catch(() => {});
-    djAirtimeReleasing = false;
-    djAirtimeSong = null;
-  }
-}
-async function reserveDJAirtime(generation, songKey) {
-  if (snapshot.djStation?.settings?.play_over_music !== false) return true;
-  djAirtimePending = true;
-  djAirtimeSong = songKey;
-  try {
-    await browserRequest('heartbeat', {id: browserId, status: 'playing', ready: true});
-    const result = await djJSON('/api/dj/airtime', {operation: 'begin', songKey, clientId: browserId});
-    if (generation !== djGeneration || !browserDesired || browserVolume <= 0 || songKey !== snapshot.state.songKey) {
-      await djJSON('/api/dj/airtime', {operation: 'end', token: result.token, clientId: browserId});
-      return false;
-    }
-    djAirtimeToken = result.token;
-    djAirtimePending = false;
-    snapshot.djAirtime = result.airtime;
-    await audioContext.suspend();
-    return generation === djGeneration;
-  } catch (error) {
-    djAirtimePending = false;
-    if (!djAirtimeToken) djAirtimeSong = null;
-    throw error;
-  }
-}
-function djListening() {
-  return djEnabled && browserDesired && browserVolume > 0 && !!audioController &&
-    (audioContext?.state === 'running' || (audioContext?.state === 'suspended' && djHasAirtime())) &&
-    (!snapshot.state.paused || djHasAirtime()) && snapshot.state.output !== 'host' &&
-    !snapshot.exited && !snapshot.playerStopped && !snapshot.restarting && !snapshot.setupRequired;
-}
 function browserPlaybackStatus() {
   if (audioController && browserDesired && audioContext?.state === 'running' && !snapshot.state.paused) {
     const now = audioContext.currentTime;
@@ -784,194 +722,117 @@ function browserPlaybackStatus() {
   }
   return browserStatus === 'playing' ? 'waiting' : browserStatus;
 }
-function djCanSpeak() {
-  if (!djListening() || voiceSampleController || voiceSampleAudio || djAirtimeReleasing) return false;
-  if (djHasAirtime()) return true;
-  if (browserStatus !== 'playing') return false;
-  const now = audioContext.currentTime;
-  return [...audioSources].some(source => source.playbackStart <= now && source.playbackEnd > now);
+
+// The server writes, voices and mixes the DJ into the player's own output, so
+// every speaker and browser hears it. This page only shows and steers it.
+const djVoiceStates = {writing: 'Writing an intro…', preparing: 'Warming up the mic…', on_air: 'On air'};
+const djStationStates = {choosing: 'Picking the next set…', preparing_intro: 'Writing the set intro…', waiting_listener: 'Waiting for music to play'};
+function djSong(song) { return `${song.artist || 'Unknown artist'} — ${song.title || 'Untitled'}`; }
+function renderDJ(data) {
+  const station = data.djStation || {}, voice = data.djVoice || {}, state = data.state || {};
+  const playerUp = !data.exited && !data.playerStopped && !data.restarting && !data.setupRequired;
+  const llm = !!station.llmReady, voiced = !!station.voiceReady, talk = !!station.talk;
+  const active = ['writing', 'preparing', 'on_air'].includes(voice.status);
+  const label = djVoiceStates[voice.status] || djStationStates[station.enabled && station.status] ||
+    (station.enabled ? 'Running the station' : talk ? 'Standing by' : 'Off');
+  const booth = $('dj-booth');
+  booth.dataset.state = voice.status === 'on_air' ? 'on-air' : active || djStationStates[station.enabled && station.status] ? 'busy' :
+    talk || station.enabled ? 'ready' : 'off';
+  $('dj-state').textContent = label;
+  $('dj-name').textContent = station.settings?.dj_name || 'Your DJ';
+
+  if (document.activeElement !== $('dj-talk') && !djBusy) $('dj-talk').checked = talk;
+  if (document.activeElement !== $('dj-station-enabled') && !djBusy) $('dj-station-enabled').checked = !!station.enabled;
+  $('dj-talk').disabled = djBusy || !voiced;
+  $('dj-station-enabled').disabled = djBusy || !llm;
+  if (document.activeElement !== $('dj-theme') && !$('dj-theme').dataset.edited) $('dj-theme').value = station.theme || '';
+
+  // The last line stays up after it airs so you can read what was said.
+  const line = voice.text && (active || voice.status === 'done') && voice.songKey === state.songKey ? voice.text : '';
+  $('dj-mic').hidden = !line && voice.status !== 'writing';
+  $('dj-line').textContent = line || 'Writing…';
+  $('dj-mic').classList.toggle('dj-mic-live', voice.status === 'on_air');
+  $('dj-stop').hidden = !active;
+
+  const notices = [];
+  if (voice.status === 'error' && voice.error) notices.push(voice.error);
+  if (station.enabled && station.status === 'error' && station.error) notices.push(station.error);
+  if (!llm) notices.push('Add an LLM endpoint and model in Settings so the DJ can write intros and pick music.');
+  if (!voiced) notices.push('Add a voice endpoint in Settings, or install espeak-ng on the server, so the DJ can talk.');
+  $('dj-notice').hidden = !notices.length;
+  $('dj-notice-text').textContent = notices.join(' ');
+  $('dj-notice-link').hidden = llm && voiced;
+
+  const playing = playerUp && !!state.title;
+  $('dj-introduce').disabled = !playing || !llm || !voiced || active;
+  $('dj-say').disabled = !playing || !voiced;
+  $('dj-text').disabled = !playerUp || !voiced;
+
+  const set = station.currentSet, next = station.next;
+  const items = set ? set.songs.map((song, index) => ({song, now: index + 1 === set.position, done: index + 1 < set.position}))
+    : next?.songs ? next.songs.map(song => ({song})) : next ? [{song: next}] : [];
+  $('dj-lineup-title').textContent = set ? `This set · ${set.position} of ${set.songs.length}${set.duration ? ' · ' + time(set.duration) : ''}` :
+    next?.songs ? `Next set · ${next.songs.length} songs${next.duration ? ' · ' + time(next.duration) : ''}` : 'Up next';
+  if (set && next && !next.songs && !set.songs.some(song => song.id === next.id)) items.push({song: next, after: true});
+  const signature = JSON.stringify(items.map(item => [item.song.id, item.now, item.done, item.after]));
+  if ($('dj-queue').dataset.signature !== signature) {
+    $('dj-queue').dataset.signature = signature;
+    $('dj-queue').replaceChildren(...items.map(item => {
+      const row = document.createElement('li');
+      row.textContent = (item.after ? 'Then ' : '') + djSong(item.song);
+      row.className = item.now ? 'dj-now' : item.done ? 'dj-done' : item.after ? 'dj-after' : '';
+      if (item.now) row.setAttribute('aria-current', 'true');
+      return row;
+    }));
+  }
+  $('dj-queue').hidden = !items.length;
+  $('dj-lineup-empty').hidden = !!items.length;
+  $('dj-lineup-empty').textContent = station.enabled ? 'The DJ is lining up songs from your library…' :
+    'Turn on “Picks the music” and the DJ builds sets from your saved songs.';
 }
-function duckDJ(speaking) {
-  djSpeaking = speaking;
-  if (audioGain) audioGain.gain.value = browserVolume * (speaking ? .2 : 1);
-  $('dj-stop').disabled = !speaking && !djController;
+async function djControl(change) {
+  djBusy = true;
+  renderDJ(snapshot);
+  try {
+    snapshot.djStation = await djJSON('/api/dj/control', change);
+  } catch (error) { notify(error.message); }
+  finally { djBusy = false; renderDJ(snapshot); }
 }
-function stopDJ() {
-  ++djGeneration;
-  if (djController) djController.abort();
-  djController = null;
-  if (djAudio) { djAudio.pause(); djAudio.removeAttribute('src'); djAudio = null; }
-  if (djObjectURL) { URL.revokeObjectURL(djObjectURL); djObjectURL = null; }
-  if (djUtterance) { speechSynthesis.cancel(); djUtterance = null; }
-  duckDJ(false);
-  releaseDJAirtime();
-}
-async function djJSON(path, message, signal) {
-  const response = await fetch(path, message === undefined ? {signal} : {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(message), signal
+async function djJSON(path, message) {
+  const response = await fetch(path, message === undefined ? {} : {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(message)
   });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'The DJ could not prepare that line.');
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || 'The DJ could not do that.');
   return data;
 }
-async function speakDJ(text, songKey) {
-  stopDJ();
-  if (!djCanSpeak() || songKey !== snapshot.state.songKey) return;
-  const generation = djGeneration;
-  $('dj-line').textContent = text;
-  $('dj-line').hidden = false;
-  $('dj-status').textContent = 'Preparing the voice…';
-  if (djInfo.voiceReady) {
-    const controller = djController = new AbortController();
-    $('dj-stop').disabled = false;
-    const timeout = setTimeout(() => controller.abort(), 35000);
-    try {
-      const response = await fetch('/api/voice', {method: 'POST',
-        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}), signal: controller.signal});
-      if (!response.ok) { const data = await response.json(); throw new Error(data.error); }
-      const blob = await response.blob();
-      if (!djCanSpeak() || generation !== djGeneration || songKey !== snapshot.state.songKey) return;
-      if (!await reserveDJAirtime(generation, songKey)) return;
-      djObjectURL = URL.createObjectURL(blob);
-      const audio = djAudio = new Audio(djObjectURL);
-      audio.volume = browserVolume;
-      audio.onended = () => { if (generation === djGeneration) { stopDJ(); $('dj-status').textContent = 'Listening for the next song.'; } };
-      audio.onerror = () => { if (generation === djGeneration) { stopDJ(); $('dj-status').textContent = 'Could not play the DJ audio.'; } };
-      duckDJ(true);
-      await audio.play();
-      $('dj-status').textContent = 'DJ on air';
-    } catch (error) {
-      if (generation === djGeneration) {
-        stopDJ();
-        $('dj-status').textContent = error.name === 'AbortError' ? 'Voice preparation timed out.' : error.message;
-      }
-    } finally {
-      clearTimeout(timeout);
-      if (djController === controller) djController = null;
-    }
-  } else if ('speechSynthesis' in window) {
-    try { if (!await reserveDJAirtime(generation, songKey)) return; }
-    catch (error) { stopDJ(); $('dj-status').textContent = error.message; return; }
-    const utterance = djUtterance = new SpeechSynthesisUtterance(text);
-    utterance.volume = browserVolume;
-    const localVoice = speechSynthesis.getVoices().find(voice => voice.localService && voice.lang.startsWith('en'));
-    if (localVoice) utterance.voice = localVoice;
-    utterance.onend = () => {
-      if (generation === djGeneration) { stopDJ(); $('dj-status').textContent = 'Listening for the next song.'; }
-    };
-    utterance.onerror = () => {
-      if (generation === djGeneration) { stopDJ(); $('dj-status').textContent = 'Browser voice is unavailable. Configure a voice endpoint on the server.'; }
-    };
-    duckDJ(true);
-    speechSynthesis.speak(utterance);
-    $('dj-status').textContent = 'DJ on air · browser voice';
-  } else $('dj-status').textContent = 'Configure a voice endpoint on the server to hear the DJ.';
-}
-async function introduceDJ() {
-  if (!djCanSpeak() || !snapshot.state.title) return;
-  stopDJ();
-  const generation = djGeneration, songKey = snapshot.state.songKey;
-  djGeneratedTrack = songKey;
-  const controller = djController = new AbortController();
-  $('dj-stop').disabled = false;
-  $('dj-status').textContent = 'The DJ is writing an introduction…';
-  const timeout = setTimeout(() => controller.abort(), 35000);
-  try {
-    await browserRequest('heartbeat', {id: browserId, status: browserPlaybackStatus(), ready: audioContext?.state === 'running'});
-    const result = await djJSON('/api/dj', {style: $('dj-style').value}, controller.signal);
-    if (djEnabled && generation === djGeneration && songKey === snapshot.state.songKey && result.songKey === songKey) {
-      await speakDJ(result.text, result.songKey);
-    }
-  } catch (error) {
-    if (generation === djGeneration) $('dj-status').textContent = error.name === 'AbortError' ? 'DJ preparation timed out.' : error.message;
-  } finally {
-    clearTimeout(timeout);
-    if (djController === controller) { djController = null; $('dj-stop').disabled = !djSpeaking; }
-  }
-}
-function renderDJ(data) {
-  const state = data.state;
-  const station = data.djStation || {};
-  $('dj-station-enabled').checked = !!station.enabled;
-  if (document.activeElement !== $('dj-theme') && !$('dj-theme').dataset.edited && station.theme) $('dj-theme').value = station.theme;
-  if (document.activeElement !== $('dj-style') && !$('dj-style').dataset.edited && station.style) $('dj-style').value = station.style;
-  const set = station.currentSet;
-  const upcoming = station.next?.songs;
-  $('dj-station-status').textContent = station.error || (station.enabled ? (station.status === 'waiting_listener' ? 'DJ is waiting for music to play in a listening browser.' :
-    (upcoming ? `Next set: ${upcoming.length} songs · ${time(station.next.duration)} — ${upcoming.map(song => `${song.artist} — ${song.title}`).join('; ')}` :
-      (set ? `Set ${set.position}/${set.songs.length} · ${time(set.duration)}${station.next ? ' · Up next: ' + station.next.artist + ' — ' + station.next.title : ''}` :
-        (station.next ? `Up next: ${station.next.artist} — ${station.next.title}` : 'The DJ is choosing the next cached set…')))) : 'Cached-song DJ station is off.');
-  if (state.songKey !== djTrack) {
-    stopDJ();
-    djTrack = state.songKey;
-    $('dj-line').hidden = true;
-  }
-  if (!djEnabled) return;
-  if (data.exited || data.playerStopped || data.restarting) { stopDJ(); djAnnouncement = 0; return; }
-  const canSpeak = djCanSpeak();
-  $('dj-introduce').disabled = !canSpeak || !djInfo.llmReady || !state.title;
-  $('dj-say').disabled = !canSpeak;
-  if (!canSpeak) {
-    if (djSpeaking || djController) stopDJ();
-    if (!djListening()) djAnnouncement = Math.max(djAnnouncement, data.djAnnouncement?.id || 0);
-    $('dj-status').textContent = 'DJ is quiet until music plays in this browser.';
-    return;
-  }
-  const announcement = data.djAnnouncement || {};
-  if (announcement.id > djAnnouncement) {
-    djAnnouncement = announcement.id;
-    if (announcement.songKey === state.songKey) {
-      djGeneratedTrack = state.songKey;
-      speakDJ(announcement.text, announcement.songKey);
-      return;
-    }
-  }
-  if (!station.enabled && djInfo.llmReady && state.title && !state.paused && !data.pending && !data.prompt.active &&
-      djGeneratedTrack !== state.songKey && (state.metadata?.status || state.elapsed > 3)) introduceDJ();
-}
-$('dj-enabled').addEventListener('change', async event => {
-  djEnabled = event.target.checked;
-  stopDJ();
-  $('dj-say').disabled = !djEnabled;
-  $('dj-introduce').disabled = true;
-  djGeneratedTrack = '';
-  djAnnouncement = snapshot.djAnnouncement?.id || 0;
-  if (!djEnabled) { $('dj-status').textContent = 'DJ mode is off.'; return; }
-  const generation = djGeneration;
-  try {
-    djInfo = await djJSON('/api/dj');
-    if (!djEnabled || generation !== djGeneration) return;
-    $('dj-status').textContent = djInfo.llmReady ? 'Listening for the next song.' :
-      'Agent DJ ready. Supply a line below, or configure an LLM endpoint on the server for automatic introductions.';
-    renderDJ(snapshot);
-  } catch (error) { if (djEnabled) $('dj-status').textContent = error.message; }
+$('dj-talk').addEventListener('change', event => djControl({talk: event.target.checked}));
+$('dj-station-enabled').addEventListener('change', event => {
+  const change = {enabled: event.target.checked};
+  if ($('dj-theme').value.trim()) change.theme = $('dj-theme').value;
+  djControl(change);
 });
-for (const id of ['dj-theme', 'dj-style']) $(id).addEventListener('input', () => { $(id).dataset.edited = 'true'; });
-$('dj-station-enabled').addEventListener('change', async event => {
-  const enabled = event.target.checked;
-  event.target.disabled = true;
-  try {
-    const station = await djJSON('/api/dj/control', {enabled, theme: $('dj-theme').value, style: $('dj-style').value});
-    snapshot.djStation = station;
-    if (enabled && !djEnabled) {
-      $('dj-enabled').checked = true;
-      $('dj-enabled').dispatchEvent(new Event('change'));
-    }
-    renderDJ(snapshot);
-  } catch (error) { notify(error.message); event.target.checked = !enabled; }
-  finally { event.target.disabled = false; }
+$('dj-theme').addEventListener('input', () => { $('dj-theme').dataset.edited = 'true'; });
+$('dj-theme-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  if (!$('dj-theme').value.trim()) return;
+  await djControl({theme: $('dj-theme').value});
+  delete $('dj-theme').dataset.edited;
+  notify('Theme set. The DJ uses it for the next set.');
 });
-$('dj-introduce').addEventListener('click', introduceDJ);
-$('dj-stop').addEventListener('click', () => { stopDJ(); $('dj-status').textContent = 'Voice stopped.'; });
+$('dj-introduce').addEventListener('click', async () => {
+  try { snapshot.djVoice = await djJSON('/api/dj/introduce', {}); renderDJ(snapshot); }
+  catch (error) { notify(error.message); }
+});
+$('dj-stop').addEventListener('click', () => djControl({stopVoice: true}));
 $('dj-line-form').addEventListener('submit', async event => {
   event.preventDefault();
-  if (!djCanSpeak()) return;
   try {
-    await djJSON('/api/dj/announce', {text: $('dj-text').value, songKey: snapshot.state.songKey});
+    snapshot.djVoice = await djJSON('/api/dj/announce', {text: $('dj-text').value, songKey: snapshot.state.songKey});
     $('dj-text').value = '';
-  } catch (error) { $('dj-status').textContent = error.message; }
+    renderDJ(snapshot);
+  } catch (error) { notify(error.message); }
 });
-window.addEventListener('pagehide', stopDJ);
 
 function renderMetadata(state) {
   const metadata = state.metadata || {};
@@ -1100,7 +961,7 @@ async function loadVoiceChoices() {
     renderVoiceChoices(data.voices, $('setting-dj-voice').value, data.default);
     $('dj-voices-status').textContent = data.configured ?
       `${data.voices.length} voices available.${data.default ? ' Server default: ' + data.default + '.' : ''} Save & restart player after changing the endpoint.` :
-      'Configure a voice endpoint to choose its voices. Without one, DJ mode uses the browser’s default voice.';
+      'Configure a voice endpoint to choose its voices. Without one, the server speaks with espeak-ng when it is installed.';
   } catch (error) {
     if (generation === voiceChoicesGeneration) $('dj-voices-status').textContent = error.name === 'AbortError' ?
       'Voice list timed out. Your selected voice is preserved.' : error.message;
@@ -1120,7 +981,6 @@ function stopVoiceSample() {
 }
 $('sample-dj-voice').addEventListener('click', async () => {
   if (voiceSampleController || voiceSampleAudio) { stopVoiceSample(); $('voice-sample-status').textContent = 'Sample stopped.'; return; }
-  stopDJ();
   const controller = voiceSampleController = new AbortController();
   const voice = $('setting-dj-voice').value;
   $('sample-dj-voice').textContent = 'Stop sample';
