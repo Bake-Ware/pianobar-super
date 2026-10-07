@@ -1566,9 +1566,11 @@ body[data-pinned="true"] #widget-pin {
 
 /* Optional song details and external discovery links. */
 .song-metadata { font-size: 13px; color: var(--muted); margin: 8px 0; }
-.song-links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; margin: 12px 0; font-size: 13px; }
-.song-links a { color: inherit; }
-.song-links[hidden] { display: none; }
+.song-links { display: flex; justify-content: flex-end; align-items: center; gap: 14px; margin: 14px 0 0; }
+.song-links a { display: inline-grid; place-items: center; min-width: 32px; min-height: 32px; opacity: .85; transition: opacity .15s; }
+.song-links a:hover, .song-links a:focus-visible { opacity: 1; }
+.song-links svg { display: block; height: 18px; width: auto; }
+.song-links[hidden], .song-links a[hidden] { display: none; }
 
 /* DJ booth, inside the player controls: the server voices the DJ through the
    player; this panel only shows and steers it. */
@@ -1598,16 +1600,12 @@ body[data-pinned="true"] #widget-pin {
 .dj-mic blockquote { flex: 1; min-width: 0; margin: 0; font-size: 13px; line-height: 1.55; overflow-wrap: anywhere; }
 .dj-notice { margin: 10px 0 0; font-size: 11px; line-height: 1.6; color: #f0c9a8; }
 .dj-notice a { text-decoration: underline; text-underline-offset: 3px; white-space: nowrap; }
-.dj-say { display: flex; gap: 8px; margin-top: 12px; }
-.dj-say .dj-field { flex: 1; min-width: 0; }
 .dj-field { display: flex; }
 .dj-field input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid #506056; border-right: 0; border-radius: 0; background: transparent; color: #f4f4eb; font-size: 12px; }
 .dj-field input::placeholder { color: #a3b1a7; }
 .dj-field input:disabled { opacity: .45; }
 .dj-button { flex-shrink: 0; padding: 7px 12px; border: 1px solid #506056; border-radius: 0; background: transparent; color: #f4f4eb; font-size: 11px; white-space: nowrap; }
 .dj-button:hover:enabled { background: #ffffff14; }
-#dj-say { border-color: var(--orange); background: var(--orange); color: #172b2b; font-weight: 650; }
-#dj-say:hover:enabled { background: #ee9b69; }
 .dj-more { margin-top: 8px; border-bottom: 0; }
 .player-content .dj-more summary { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; font-size: 10px; letter-spacing: 1.2px; text-transform: uppercase; color: #d0d9cc; }
 .dj-more summary::after { content: "+"; }
@@ -1626,7 +1624,12 @@ body[data-pinned="true"] #widget-pin {
 @media (max-width: 560px) {
     .dj-field input { font-size: 16px; }
     .dj-button, .dj-switch { min-height: 44px; }
-    .dj-say { flex-wrap: wrap; }
-    .dj-say .dj-field { flex-basis: 100%; }
-    #dj-introduce { flex: 1; }
 }
+
+/* Settings: try the DJ on the current song. */
+.dj-try { margin: 22px 0 6px; }
+.dj-try-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.dj-try-row input { flex: 1 1 260px; min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 0; background: var(--paper); color: var(--ink); font: inherit; }
+.dj-try-row button { padding: 12px 18px; border: 1px solid var(--line); background: var(--selected); color: var(--ink); }
+#dj-say { border-color: var(--orange); background: var(--orange); color: #172b2b; }
+@media (max-width: 560px) { .dj-try-row input { font-size: 16px; } .dj-try-row button { flex: 1; min-height: 44px; } }

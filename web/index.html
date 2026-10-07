@@ -38,7 +38,6 @@
         <aside id="activity" data-views="player" class="activity-backdrop" aria-label="Player activity"><pre id="transcript" aria-label="Player output"></pre></aside>
         <div class="player-controls"><div class="on-air"><span></span><span id="source">YOUR PERSONAL RADIO</span></div><h2 id="title">Something good is next.</h2><p id="artist" class="artist">Connect to your station and make yourself at home.</p><p id="album" class="album"></p>
         <p id="song-metadata" class="song-metadata" hidden></p>
-        <div id="song-links" class="song-links" hidden><a id="youtube-search" target="_blank" rel="noopener noreferrer">Find on YouTube ↗</a><a id="metadata-source" target="_blank" rel="noopener noreferrer" hidden>MusicBrainz ↗</a></div>
 
         <div class="progress-wrap"><progress id="progress" max="1" value="0" aria-label="Song progress"></progress><div class="times"><span id="elapsed">0:00</span><span id="duration">0:00</span></div></div>
         <div class="transport"><div class="transport-main"><button class="icon-button" data-action="act_songlove" aria-label="Love song" title="Love song" disabled>♡</button><button id="play-button" class="play-button" data-action="act_songpausetoggle" aria-label="Pause playback" disabled>Ⅱ</button><button class="icon-button skip" data-action="act_songnext" aria-label="Next song" title="Next song" disabled><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 4v16l11-8zM18 4h3v16h-3z"/></svg></button></div><div class="volume"><button data-action="act_voldown" aria-label="Decrease volume" disabled>−</button><span id="volume">0 dB</span><button data-action="act_volup" aria-label="Increase volume" disabled>+</button></div></div>
@@ -52,13 +51,16 @@
           </div>
           <div id="dj-mic" class="dj-mic" hidden><blockquote id="dj-line" aria-live="polite"></blockquote><button id="dj-stop" class="dj-button" type="button" hidden>■ Stop</button></div>
           <p id="dj-notice" class="dj-notice" hidden><span id="dj-notice-text"></span> <a id="dj-notice-link" href="#settings">Open DJ settings</a></p>
-          <form id="dj-line-form" class="dj-say"><div class="dj-field"><input id="dj-text" maxlength="700" placeholder="Give the DJ a line…" aria-label="Give the DJ a line" autocomplete="off" required><button id="dj-say" class="dj-button" type="submit">Speak</button></div><button id="dj-introduce" class="dj-button" type="button" title="Introduce this song">Introduce</button></form>
           <details id="dj-more" class="dj-more"><summary><span id="dj-lineup-title">Up next</span></summary>
             <p id="dj-hop-status" class="dj-empty" hidden></p>
             <ol id="dj-queue" hidden></ol><p id="dj-lineup-empty" class="dj-empty"></p>
             <form id="dj-theme-form" class="dj-form"><label for="dj-theme">Station theme</label><div class="dj-field"><input id="dj-theme" maxlength="450" placeholder="A varied mix from my saved music" autocomplete="off"><button class="dj-button" type="submit">Set</button></div></form>
           </details>
         </section>
+        <div id="song-links" class="song-links" hidden>
+          <a id="youtube-search" target="_blank" rel="noopener noreferrer" title="Find on YouTube" aria-label="Find this song on YouTube"><svg viewBox="0 0 28 20" aria-hidden="true" focusable="false"><rect width="28" height="20" rx="5" fill="#ff0033"/><path d="M11 5.5v9l8-4.5z" fill="#fff"/></svg></a>
+          <a id="metadata-source" target="_blank" rel="noopener noreferrer" title="MusicBrainz" aria-label="Open this recording on MusicBrainz" hidden><svg viewBox="0 0 25 28" aria-hidden="true" focusable="false"><polygon points="12 0 0 7 0 21 12 28" fill="#ba478f"/><polygon points="13 0 25 7 25 21 13 28" fill="#eb743b"/></svg></a>
+        </div>
         <div class="audio-output"><label for="audio-output">Audio output</label><select id="audio-output"><option value="host">Host</option><option value="browser">Browser</option><option value="both">Both</option></select><button id="listen-button" type="button">Listen here</button><label for="browser-name">This browser</label><input id="browser-name" maxlength="80" placeholder="Name this browser" aria-label="This browser name"><span id="audio-status" role="status"></span></div>
         </div>
       </div>
@@ -127,6 +129,10 @@
           <p class="settings-hint">Unchecked, the music holds while the DJ speaks and picks up where it left off. The DJ only writes and picks music while someone can hear it. One introduction summarizes each set; timed sets use whole songs, up to 30.</p>
           <div class="settings-buttons"><button id="sample-dj-voice" type="button">Sample voice</button><button id="refresh-dj-voices" type="button">Refresh voices</button></div>
           <p id="voice-sample-status" class="settings-hint" role="status">Preview the selected voice using the active voice server, before saving.</p>
+          <div class="dj-try">
+            <p class="settings-hint">Try your DJ on the song that is playing. Lines play through the player, so everyone listening hears them.</p>
+            <div class="dj-try-row"><input id="dj-text" maxlength="700" placeholder="Give the DJ a line…" aria-label="Give the DJ a line" autocomplete="off"><button id="dj-say" type="button">Speak</button><button id="dj-introduce" type="button">Introduce this song</button></div>
+          </div>
           <p id="dj-voices-status" class="settings-hint" role="status">Voices come from the active voice server. Save &amp; restart player after changing the endpoint.</p>
           <p id="dj-key-note" class="settings-hint"></p>
           <div class="settings-checks"><label class="setting-check"><input id="setting-dj-clear_llm_key" type="checkbox">Forget saved LLM key</label><label class="setting-check"><input id="setting-dj-clear_tts_key" type="checkbox">Forget saved voice key</label><label class="setting-check"><input id="setting-dj-metadata_network" type="checkbox" checked>Fetch missing artwork and metadata from MusicBrainz and Cover Art Archive</label></div>

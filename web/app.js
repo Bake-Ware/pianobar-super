@@ -733,11 +733,19 @@ function renderDJ(data) {
   const station = data.djStation || {}, voice = data.djVoice || {}, state = data.state || {};
   const playerUp = !data.exited && !data.playerStopped && !data.restarting && !data.setupRequired;
   const llm = !!station.llmReady, voiced = !!station.voiceReady, talk = !!station.talk, hop = !!station.hop;
+  const active = ['writing', 'preparing', 'on_air'].includes(voice.status);
+  // Settings → Try your DJ: speak a line or ask for an intro on demand.
+  const playing = playerUp && !!state.title;
+  document.querySelector('.dj-try').hidden = !llm && !voiced;
+  $('dj-text').hidden = $('dj-say').hidden = !voiced;
+  $('dj-introduce').hidden = !llm || !voiced;
+  $('dj-introduce').disabled = !playing || active;
+  $('dj-say').disabled = !playing || !$('dj-text').value.trim();
+  $('dj-text').disabled = !playerUp;
   const booth = $('dj-booth');
   // Without an LLM or a voice there is no DJ to show.
   booth.hidden = !llm && !voiced;
   if (booth.hidden) return;
-  const active = ['writing', 'preparing', 'on_air'].includes(voice.status);
   const busyStation = djStationStates[station.enabled && station.status];
   const label = djVoiceStates[voice.status] || busyStation ||
     (station.enabled ? 'Running the station' : hop ? 'Hopping stations' : talk ? 'Standing by' : 'Off');
@@ -774,12 +782,6 @@ function renderDJ(data) {
   $('dj-notice-text').textContent = notices.join(' ');
   $('dj-notice-link').hidden = true;
 
-  const playing = playerUp && !!state.title;
-  $('dj-line-form').hidden = !voiced;
-  $('dj-introduce').hidden = !llm;
-  $('dj-introduce').disabled = !playing || active;
-  $('dj-say').disabled = !playing;
-  $('dj-text').disabled = !playerUp;
 
   const set = station.currentSet, next = station.next;
   const items = set ? set.songs.map((song, index) => ({song, now: index + 1 === set.position, done: index + 1 < set.position}))
@@ -842,17 +844,25 @@ $('dj-theme-form').addEventListener('submit', async event => {
   notify('Theme set. The DJ uses it for the next set.');
 });
 $('dj-introduce').addEventListener('click', async () => {
-  try { snapshot.djVoice = await djJSON('/api/dj/introduce', {}); renderDJ(snapshot); }
+  try { snapshot.djVoice = await djJSON('/api/dj/introduce', {}); renderDJ(snapshot); notify('The DJ is writing an intro.'); }
   catch (error) { notify(error.message); }
 });
 $('dj-stop').addEventListener('click', () => djControl({stopVoice: true}));
-$('dj-line-form').addEventListener('submit', async event => {
-  event.preventDefault();
+async function speakLine() {
+  const text = $('dj-text').value.trim();
+  if (!text || $('dj-say').disabled) return;
   try {
-    snapshot.djVoice = await djJSON('/api/dj/announce', {text: $('dj-text').value, songKey: snapshot.state.songKey});
+    snapshot.djVoice = await djJSON('/api/dj/announce', {text, songKey: snapshot.state.songKey});
     $('dj-text').value = '';
     renderDJ(snapshot);
+    notify('The DJ is on it.');
   } catch (error) { notify(error.message); }
+}
+$('dj-say').addEventListener('click', speakLine);
+$('dj-text').addEventListener('input', () => renderDJ(snapshot));
+$('dj-text').addEventListener('keydown', event => {
+  // This field sits inside the settings form; Enter speaks instead of saving.
+  if (event.key === 'Enter') { event.preventDefault(); speakLine(); }
 });
 
 function renderMetadata(state) {
