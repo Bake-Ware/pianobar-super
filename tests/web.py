@@ -313,6 +313,7 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
                 page.unroute('**/api/state*')
                 for path in ('control', 'announce', 'introduce'):
                     page.unroute('**/api/dj/' + path)
+                assert page.evaluate("spokenText('[Laugh] Hi [banana] there [clear throat]')") == '(laughs) Hi there (clears throat)'
                 print('PASS: DJ booth in the controls, server-driven state, switches, stop, Settings lines and intros, icon links')
                 # Library groups by metadata in tabs; rows are reused, not rebuilt, between refreshes.
                 page.locator('.nav[data-view="library"]').click()

@@ -83,6 +83,8 @@ class DJTests(unittest.TestCase):
             self.spoken.append(dict(text=text, songKey=song_key))
             return dict(id=len(self.spoken), status='preparing', text=text, songKey=song_key, error='')
         self.session.dj.say = say
+        # Sound tags need a voice-catalog lookup; test_sound_tags_follow_the_voice_engine covers it.
+        self.session.dj.sounds_ready = lambda voice=None: False
         self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), host['Handler'])
         self.server.daemon_threads = True
         self.server.session = self.session
@@ -555,6 +557,29 @@ class DJTests(unittest.TestCase):
         self.assertEqual(self.request('/api/playlists')['playlists'][0]['id'], made['id'])
         for bad in ({}, {'description': 'x', 'count': 2}, {'description': 'x', 'extra': True}):
             self.request('/api/dj/playlist', bad, expected=400)
+
+    def test_sound_tags_follow_the_voice_engine(self):
+        sounds = host['DJ'].sounds
+        self.assertEqual(sounds('Okay [Laugh] that [dance] one [clear   throat] gets me.', True), 'Okay [laugh] that one [clear throat] gets me.')
+        self.assertEqual(sounds('Okay [laugh] that [dance] one gets me.', False), 'Okay that one gets me.')
+        dj = self.session.dj
+        del dj.sounds_ready
+        dj.voices = lambda: dict(voices=['radio', 'af_heart'], default='', configured=True, engines={'radio': 'chatterbox', 'af_heart': 'kokoro'})
+        self.assertTrue(dj.sounds_ready())
+        dj.speak({'text': '[chuckle] Here we go [banana] again.'})
+        self.assertEqual(self.calls[-1][1], dict(text='[chuckle] Here we go again.', voice='radio'))
+        dj.speak({'text': '[chuckle] Here we go [banana] again.', 'voice': 'af_heart'})
+        self.assertEqual(self.calls[-1][1], dict(text='Here we go again.', voice='af_heart'))
+        with self.assertRaises(ValueError):
+            dj.speak({'text': '[laugh]', 'voice': 'af_heart'})
+        dj.generate({}, cache=False)
+        self.assertIn('[laugh] [chuckle] [sigh] [gasp] [clear throat] [groan]', self.calls[-1][1]['messages'][0]['content'])
+        dj.emotes = False
+        self.assertFalse(dj.sounds_ready())
+        dj.speak({'text': '[chuckle] Here we go [banana] again.'})
+        self.assertEqual(self.calls[-1][1]['text'], 'Here we go again.')
+        dj.generate({}, cache=False)
+        self.assertIn('No bracketed tags', self.calls[-1][1]['messages'][0]['content'])
 
     def test_hopping_queues_each_station_once_and_announces_the_switch(self):
         import time

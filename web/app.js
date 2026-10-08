@@ -936,7 +936,7 @@ function renderDJ(data) {
   // The last line stays up after it airs so you can read what was said.
   const line = voice.text && (active || voice.status === 'done') && voice.songKey === state.songKey ? voice.text : '';
   $('dj-mic').hidden = !line && voice.status !== 'writing';
-  $('dj-line').textContent = line || 'Writing…';
+  $('dj-line').textContent = line ? spokenText(line) : 'Writing…';
   $('dj-mic').classList.toggle('dj-mic-live', voice.status === 'on_air');
   $('dj-stop').hidden = !active;
 
@@ -1242,7 +1242,7 @@ function renderSetSize() {
 }
 $('setting-dj-set_mode').addEventListener('change', renderSetSize);
 showSettingsTab(settingsTab);
-const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'dj_name', 'listener_name', 'hop_songs'];
+const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'emotes', 'dj_name', 'listener_name', 'hop_songs'];
 const settingsKeys = ['user', 'cache_dir', 'cache_songs', 'offline', 'offline_fallback', 'audio_quality', 'audio_buffer_ms'];
 async function loadSettings(force = false) {
   if (settingsBusy || (settingsLoaded && !force)) return;
@@ -1588,3 +1588,10 @@ $('playlist-picker-name').addEventListener('keydown', event => {
 $('playlist-crumb').addEventListener('click', () => {
   if ($('playlist-crumb').dataset.id) selectPlaylist($('playlist-crumb').dataset.id);
 });
+// Sound tags such as [laugh] are performed by the voice; show them as stage directions.
+const soundWords = {laugh: 'laughs', chuckle: 'chuckles', sigh: 'sighs', gasp: 'gasps', 'clear throat': 'clears throat',
+  groan: 'groans', cough: 'coughs', sniff: 'sniffs', shush: 'shh'};
+function spokenText(text) {
+  return text.replace(/\[([^\[\]]{1,24})\]/g, (_, tag) => soundWords[tag.toLowerCase()] ? `(${soundWords[tag.toLowerCase()]})` : '')
+    .replace(/\s+/g, ' ').trim();
+}

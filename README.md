@@ -153,6 +153,13 @@ in Settings to hold the music while the DJ speaks instead; the song then picks
 up from where it stopped. Pausing pauses the voice with the music; skipping,
 changing station or going online drops a line about the old song.
 
+With a Chatterbox voice, **Expressive sounds** (on by default) lets the DJ drop
+in `[laugh]`, `[chuckle]`, `[sigh]`, `[gasp]`, `[clear throat]` or `[groan]`,
+which the voice performs instead of reading. The server only offers these tags
+when the voice server's `/voices` catalog lists the active voice under the
+`chatterbox` engine. It strips them for any other voice, and always removes
+bracketed words that are not sound tags, which would otherwise be read aloud.
+
 The DJ only writes and picks music while someone can hear it: the player is not
 paused, and the output includes Host, or a browser is listening. **Talks** is
 remembered across restarts. The station picker starts off when the server
