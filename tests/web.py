@@ -132,6 +132,10 @@ with tempfile.TemporaryDirectory(prefix="pianobar-web-tests-") as temporary:
         (cache / ('c' * 64 + '.mka')).write_bytes(b'corrupt')
         (cache / ('d' * 64 + '.mka')).symlink_to(fixture)
         request('/api/library', headers={'Sec-Fetch-Site': 'cross-site'}, expected=403)
+        # No Android build installed next to the web files: nothing to download.
+        if not (ROOT / 'web' / 'pianobar.apk').exists():
+            request('/pianobar.apk', expected=404)
+            assert request('/api/settings')['androidApp'] is None
         songs = request('/api/library')['songs']
         assert [song['title'] for song in songs] == ['Blue hour', 'Late afternoon'], songs
         for invalid in ['../../config', 'http://example.com/song', 'e' * 64 + '.mka', 'c' * 64 + '.mka', 'd' * 64 + '.mka']:
