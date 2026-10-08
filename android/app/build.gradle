@@ -1,4 +1,9 @@
-plugins { id 'com.android.application' }
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose'
+    id 'org.jetbrains.kotlin.plugin.serialization'
+}
 android {
     namespace 'org.pianobarsuper.app'
     compileSdk 35
@@ -6,11 +11,11 @@ android {
         applicationId 'org.pianobarsuper.app'
         minSdk 26
         targetSdk 35
-        versionCode 2
-        versionName '2026.09.12'
+        versionCode 3
+        versionName '2026.10.08'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
-    buildFeatures { buildConfig true }
+    buildFeatures { buildConfig true; compose true }
     signingConfigs {
         release {
             if (System.getenv('PIANOBAR_KEYSTORE')) {
@@ -31,9 +36,35 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+    kotlinOptions { jvmTarget = '17' }
+    testOptions { unitTests.returnDefaultValues = true }
 }
 dependencies {
+    def composeBom = platform('androidx.compose:compose-bom:2025.04.01')
+    implementation composeBom
+    implementation 'androidx.compose.material3:material3'
+    implementation 'androidx.compose.material:material-icons-extended'
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.ui:ui-tooling-preview'
+    debugImplementation 'androidx.compose.ui:ui-tooling'
+    implementation 'androidx.activity:activity-compose:1.10.1'
+    implementation 'androidx.core:core-ktx:1.16.0'
+    implementation 'androidx.lifecycle:lifecycle-runtime-compose:2.8.7'
+    implementation 'androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7'
+    implementation 'androidx.lifecycle:lifecycle-process:2.8.7'
+    implementation 'androidx.navigation:navigation-compose:2.8.9'
+    implementation 'androidx.media3:media3-session:1.6.1'
+    implementation 'androidx.media3:media3-exoplayer:1.6.1'
+    implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2'
+    implementation 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'io.coil-kt:coil-compose:2.7.0'
     testImplementation 'junit:junit:4.13.2'
+    testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'
+    testImplementation 'org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2'
+    androidTestImplementation composeBom
+    androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest'
     androidTestImplementation 'androidx.test:runner:1.6.2'
     androidTestImplementation 'androidx.test:core:1.6.1'
     androidTestImplementation 'androidx.test.ext:junit:1.2.1'

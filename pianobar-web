@@ -2331,9 +2331,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data = {key: self.server.session.state.get(key, [])}
             self.reply(200, json.dumps(data).encode())
             return
+        if parsed.path == '/pianobar.apk':
+            # An Android build installed next to the web files (not in the repository).
+            apk = self.server.assets / 'pianobar.apk'
+            try:
+                if apk.is_symlink() or not apk.is_file() or apk.stat().st_size > 200 * 1024 * 1024:
+                    raise FileNotFoundError
+                data = apk.read_bytes()
+            except OSError:
+                self.reply(404, b'{"error":"No Android app is installed on this server."}')
+                return
+            self.reply(200, data, 'application/vnd.android.package-archive',
+                       headers={'Content-Disposition': 'attachment; filename="pianobar.apk"'})
+            return
         if parsed.path == '/api/settings':
             try:
-                self.reply(200, json.dumps(self.server.configuration.public()).encode())
+                apk = self.server.assets / 'pianobar.apk'
+                info = None
+                with contextlib.suppress(OSError):
+                    info = apk.stat() if apk.is_file() and not apk.is_symlink() else None
+                settings = self.server.configuration.public()
+                settings['androidApp'] = {'size': info.st_size, 'updated': int(info.st_mtime)} if info else None
+                self.reply(200, json.dumps(settings).encode())
             except (OSError, ValueError):
                 self.reply(500, b'{"error":"Could not read settings."}')
             return

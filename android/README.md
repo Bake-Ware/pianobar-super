@@ -1,77 +1,94 @@
 # pianobar for Android
 
-A generic Android companion for a pianobar web server, with an on-device audio
-library. Android 8.0 or newer is required. The app starts with **no server
-configured**; there are no bundled hostnames, account credentials, or access tokens.
+A native Android app for a pianobar web server: control your radio, listen on
+the phone, and keep songs on the phone for when there is no connection.
+Android 8.0 or newer. The app starts with **no server configured**; there are no
+bundled hostnames, accounts or tokens.
+
+Built with Kotlin, Jetpack Compose (Material 3) and Media3.
 
 ## Connect
 
-1. Open **Settings** in the app.
-2. Enter your server's origin, such as `https://radio.example.com` or
-   `http://192.168.1.10:8765`, then choose **Save server**.
-3. Choose **Player**, and sign in using your server's normal authentication flow.
+Enter your server's origin, such as `https://radio.example.com` or
+`http://192.168.1.10:8765`, and choose **Connect**. If the server is behind a
+sign-in page (for example Cloudflare Access), the app opens it in an in-app
+browser; once you are signed in the app uses that session for everything. A
+pianobar web password can be entered on the first screen or when the server asks.
 
-The Player screen keeps station selection and settings in an in-app WebView, but
-**live audio runs natively in a foreground Android media service**, independently
-of the WebView and its timers. After signing in and selecting a station, tap
-**Listen** above the page. Locking the screen or leaving Player keeps audio running.
-The media notification and lock screen provide Play/Pause, Next and Stop.
-Pause affects this device only; Next advances the shared server player.
-Unplugging headphones pauses playback. Other audio apps and calls obey Android
-audio focus. Starting a downloaded track stops live streaming, and vice versa.
+- Web passwords are encrypted with a key held in the Android Keystore.
+- Sign-in cookies live in the app's private WebView cookie jar.
+- Credentials are only sent to the configured origin, and redirects are never
+  followed: a redirect to an identity provider means "sign in again", and the
+  app shows a **Sign in** banner.
+- Public servers require HTTPS; HTTP is allowed for local addresses.
+- Some identity providers (including Google OAuth) reject embedded browsers. Use
+  another login method on the proxy, such as an email code.
 
-The native service reads the existing framed 16-bit PCM API using AudioTrack;
-no server update or transcoding is required. It maintains its own listener lease,
-refreshes metadata, reconnects after interrupted connections, and holds CPU/Wi-Fi
-locks while listening. Mono/stereo at 8–192 kHz are accepted; malformed and
-oversized frames are rejected. It honors server-side listener volume and routing.
-Concurrent listeners remain unsynchronized across rooms.
+**More → Change server or sign out** forgets the password and cookies.
 
-Sign in **inside the app**: Custom Tab/browser sessions cannot be imported.
-HTTP Basic web passwords stay in process memory; the WebView's private cookie
-store supports cookie-based proxy sessions. Credentials are only attached to the
-configured origin; native API requests never follow login redirects. If a session
-expires, playback stops and asks you to sign in again. Certificates are validated
-normally; there is no certificate-error bypass or JavaScript-to-native bridge.
-Some identity providers (including Google OAuth) reject embedded browsers. Such
-providers require a supported in-app proxy login method (for example, an already
-configured email-code option) or the password-protected LAN server. This build
-does not add an external-browser OAuth pairing flow or change proxy policy.
+## What's in the app
 
-Server URLs must be origins without paths, queries, or embedded credentials.
-Public servers require HTTPS; HTTP is allowed for local addresses and local hosts.
+The bottom bar (a side rail on tablets and in landscape) holds five tabs:
 
-## Download and listen offline
+- **Now playing**: artwork, song details and genres, YouTube and MusicBrainz
+  links, and progress. Play/pause, Next, Love, Ban, Rest, Bookmark and volume
+  all act on the server.
+  - The **headphones** button listens on this phone.
+  - The **DJ booth** holds the Talks, Picks music and Hops stations switches,
+    what the DJ is saying (with Stop), the current set or hop status, and the
+    station theme.
+  - **Audio output** chooses where the server plays.
+- **Stations**: search (press Go with one match left to play it), play now,
+  **Play after this song**, and the station management commands.
+- **Playlists**: create, rename, describe, reorder, play, shuffle, stop and
+  delete. **Ask your DJ** builds a playlist from a description. Each playlist can
+  be downloaded to the phone and played offline.
+- **Library**: Songs, Artists, Albums and Genres tabs with search. Play a song
+  or a whole group, add it to a playlist, or download it to the phone.
+- **More**:
+  - Downloads.
+  - Server settings: the web player's Listening, Pandora, DJ, Connections and
+    Web access tabs, including voice samples and "Try your DJ".
+  - Listening devices: turn each browser or phone on or off and set its volume.
+  - Every player command, and the player log.
+  - App theme, this phone's name, and **Listen when the app opens**.
 
-In the server's **Library**, choose **Download** beside a saved song. Choose a destination in the Android file picker. The app saves the audio
-using the same authenticated server session. Keep the app running until saving completes. Cached AAC exports as M4A,
-and cached MP3 exports as MP3. Audio is copied without re-encoding; metadata and
-available JPEG/PNG artwork are included. This requires a server version with the
-`/api/download/{saved-song-id}` endpoint and `ffmpeg`/`ffprobe` installed.
+When the player asks a question, such as a new station name or a numbered
+choice, it appears as a dialog with buttons for the choices.
 
-Return to the app and open **Downloads → Add downloaded tracks**. Select one or
-several files from Android's file picker, usually in Downloads. The app imports
-its own private copies and deduplicates identical files. These play without the
-server, including with the screen off, using a foreground media service and
-lock-screen play/pause/previous/next controls. No broad storage permission is
-needed. Removing a track deletes only the app's imported copy; the browser's
-original download and server cache are retained. Uninstalling the APK deletes
-its private library. Imports currently accept audio files up to 100 MB each.
+## Listening on the phone
 
-Downloading and importing are two explicit steps: the saved document remains yours, while the offline library holds its own copy. Server-side
-**Go offline** remains separate from the Android app's on-device library.
+The headphones button joins the server as a listening device, like a browser
+tab: the phone registers, keeps its lease with heartbeats, and plays the
+server's live 16-bit PCM through `AudioTrack`.
+
+- **Background play:** it runs in a Media3 media session service, so it keeps
+  playing with the screen off.
+- **System controls:** the notification, lock screen, Bluetooth and headset
+  buttons all work.
+  - Play/pause and Next act on the server.
+  - Stop (or tapping the headphones again) stops listening on this phone.
+- **Interruptions:** calls and other apps follow Android audio focus. Unplugging
+  headphones stops listening.
+- **Connection drops:** the app reconnects with backoff.
+
+## Downloads and offline
+
+**Download to this phone** fetches a saved song from `/api/download/…` as tagged
+M4A or MP3 with cover art. The server needs `ffmpeg` and `ffprobe`.
+
+- **Storage:** downloads are stored privately in the app, named by id. Playlists
+  and the library are also cached, so you can browse them without a connection.
+- **Playing:** downloaded songs play in the app's own player (ExoPlayer), with
+  seeking and previous/next. Starting them stops the live stream, and **Back to
+  the radio** returns to it.
+- **Importing:** **More → Downloads → Import** adds audio files from the file
+  picker. Files imported by earlier versions of the app are carried over.
 
 ## Build
 
-New builds use the project-specific application ID `org.pianobarsuper.app`.
-This replaces the initial release's domain-based application ID. Android treats
-it as a separate app: configure the server again and import your downloaded
-tracks. Keep the old app until you have recovered any files you need; its private
-library is not automatically migrated. The initial published APK may still use
-the earlier identity; check the release notes before installing.
-
 Install JDK 17 and the Android SDK (`platforms;android-35`, `build-tools;35.0.0`).
-Set `ANDROID_HOME` to the SDK location or create an ignored `local.properties`
+Set `ANDROID_HOME` to the SDK location, or create an ignored `local.properties`
 with `sdk.dir=...`. Then:
 
 ```sh
@@ -80,41 +97,33 @@ cd android
 ```
 
 The installable development APK is `app/build/outputs/apk/debug/app-debug.apk`.
-The [GitHub Actions template](ci/android.yml.example) runs the same checks and
-uploads the APK as the `pianobar-android-debug` artifact. To enable it, copy the
-template to `.github/workflows/android.yml` and commit it using a GitHub login
-with permission to write workflows. The template is not active until installed. Debug signing keys can differ between machines
-and CI runs; use a stable release key for upgradeable distributed APKs.
+The [GitHub Actions template](ci/android.yml.example) runs the same checks. Copy
+it to `.github/workflows/android.yml` to enable it.
 
-For a signed release, provide an existing private keystore outside the repository:
+For a signed release, provide a private keystore outside the repository:
 
 ```sh
 export PIANOBAR_KEYSTORE=/absolute/path/to/private-release.jks
 export PIANOBAR_KEY_ALIAS=pianobar
-# Set PIANOBAR_KEYSTORE_PASSWORD and, if different, PIANOBAR_KEY_PASSWORD
-# through your local secret manager or CI secrets, not a committed file.
+# PIANOBAR_KEYSTORE_PASSWORD (and PIANOBAR_KEY_PASSWORD) from your secret manager
 ./gradlew assembleRelease
 ```
 
-Without signing variables, `assembleRelease` produces an unsigned APK. Keep the
-same private signing key for future releases. Never commit the keystore,
-passwords, SDK paths, APK outputs, or runtime configuration. The Gradle wrapper
-is checked in; build outputs and local configuration are ignored.
+Keep the same signing key for future releases so installs upgrade in place.
+Never commit the keystore, passwords, SDK paths or APKs.
 
-## Device tests
+## Tests
 
-Use a disposable Android emulator with API 35, then run:
+Unit tests cover:
 
-```sh
-./gradlew connectedDebugAndroidTest
-```
+- server address validation and same-origin checks;
+- the PCM frame parser (byte order, fragmented reads, keepalives, malformed
+  frames);
+- the API client against a mock server: credentials only for the origin, no
+  Origin header, cookies kept, redirects and HTML meaning "sign in", error
+  messages;
+- snapshot parsing and DJ sound-tag display.
 
-These tests reset the app's test configuration/library and verify blank initial
-configuration, server URL persistence, imported-file deduplication, playback
-after the source disappears, background/screen-off playback, pause/resume, and
-removal. Live-stream tests use an authenticated local PCM fixture and verify 95 seconds
-of screen-off playback, listener renewal, pause/resume, connection recovery,
-Next, rejection of login redirects, and shutdown on expired authentication.
-Parser unit tests cover fragmented reads, byte order, keepalives and malformed
-frames. Real proxy sign-in and physical-device audio require manual validation;
-tests do not contain real credentials or bypass authentication.
+To try the app against a local server, run `pianobar --offline --port 18765` on
+the development machine, then `adb reverse tcp:18765 tcp:18765`, and connect the
+emulator to `http://localhost:18765`.

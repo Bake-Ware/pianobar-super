@@ -1,17 +1,24 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <application android:label="pianobar" android:theme="@style/AppTheme"
-        android:icon="@drawable/ic_pianobar" android:usesCleartextTraffic="true" android:allowBackup="false" android:dataExtractionRules="@xml/backup_rules" android:supportsRtl="true">
-        <activity android:name=".PlayerActivity" android:exported="false" />
-        <service android:name=".StreamPlayerService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
-        <activity android:name=".MainActivity" android:exported="true">
-            <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="android.intent.category.LAUNCHER" /></intent-filter>
+    <application android:name=".PianobarApp" android:label="pianobar" android:theme="@style/AppTheme"
+        android:icon="@drawable/ic_pianobar" android:usesCleartextTraffic="true" android:allowBackup="false" android:fullBackupContent="false"
+        android:dataExtractionRules="@xml/backup_rules" android:supportsRtl="true" android:enableOnBackInvokedCallback="true">
+        <activity android:name=".ui.MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize"
+            android:launchMode="singleTask" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
         </activity>
-        <service android:name=".OfflinePlayerService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
+        <activity android:name=".ui.SignInActivity" android:exported="false" />
+        <service android:name=".playback.PlaybackService" android:exported="true" android:foregroundServiceType="mediaPlayback">
+            <intent-filter>
+                <action android:name="androidx.media3.session.MediaSessionService" />
+            </intent-filter>
+        </service>
     </application>
 </manifest>

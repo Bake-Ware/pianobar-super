@@ -1253,6 +1253,12 @@ async function loadSettings(force = false) {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not load settings.');
     settingsBaseline = data;
+    // An app build installed on this server is offered first; otherwise the published release.
+    const apk = data.androidApp;
+    $('android-download').href = apk ? '/pianobar.apk' : 'https://github.com/Bake-Ware/pianobar-super/releases/download/android-2026.09.10/pianobar-2026.09.10.apk';
+    $('android-download').toggleAttribute('download', !!apk);
+    $('android-download-note').hidden = !apk;
+    if (apk) $('android-download-note').textContent = `From this server · ${(apk.size / 1048576).toFixed(1)} MB · updated ${new Date(apk.updated * 1000).toLocaleDateString()}. If Android says the app isn’t installed, uninstall an older pianobar app first.`;
     for (const key of settingsKeys) {
       const input = $('setting-' + key);
       if (input.type === 'checkbox') input.checked = data[key];
