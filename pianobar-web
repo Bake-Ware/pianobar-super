@@ -1735,10 +1735,13 @@ class DJ:
         return ' '.join(re.sub(r'\[([^\[\]\n]{1,24})\]', tag, text).split())
 
     def sounds_prompt(self):
-        if self.sounds_ready():
-            return (' You may add an expressive sound where it feels natural, written exactly as one of: ' +
-                    ' '.join(f'[{name}]' for name in self.offered_tags) +
-                    '. Place it inline where the sound happens. Most lines need none; never more than two. No other bracketed text.')
+        # Models overuse sounds when merely allowed them, so the server decides:
+        # about one line in three gets one, from a random pair for variety.
+        chance = random.SystemRandom()
+        if self.sounds_ready() and chance.random() < 1 / 3:
+            pair = chance.sample(self.offered_tags, 2)
+            return (f' Include exactly one expressive sound, written exactly as [{pair[0]}] or [{pair[1]}], '
+                    'placed inline where a real DJ would naturally make that sound (not as the first word). No other bracketed text.')
         return ' No bracketed tags or sound effects.'
 
     def speak(self, message, wait=False):

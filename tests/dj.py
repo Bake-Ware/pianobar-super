@@ -572,8 +572,11 @@ class DJTests(unittest.TestCase):
         self.assertEqual(self.calls[-1][1], dict(text='Here we go again.', voice='af_heart'))
         with self.assertRaises(ValueError):
             dj.speak({'text': '[laugh]', 'voice': 'af_heart'})
-        dj.generate({}, cache=False)
-        self.assertIn('[laugh] [chuckle] [sigh] [gasp] [clear throat] [groan]', self.calls[-1][1]['messages'][0]['content'])
+        prompts = set()
+        for _ in range(40):
+            dj.generate({}, cache=False)
+            prompts.add('exactly one expressive sound' in self.calls[-1][1]['messages'][0]['content'])
+        self.assertEqual(prompts, {True, False})  # some lines get a sound, most don't
         dj.emotes = False
         self.assertFalse(dj.sounds_ready())
         dj.speak({'text': '[chuckle] Here we go [banana] again.'})
