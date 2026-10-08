@@ -3,6 +3,7 @@ package org.pianobarsuper.app.playback
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.util.Log
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
@@ -22,6 +23,8 @@ import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
+
+const val TAG = "pianobar"
 
 enum class StreamStatus { Connecting, Waiting, Playing, Reconnecting, SignInRequired, Stopped }
 
@@ -63,6 +66,7 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
     }
 
     private fun set(value: StreamStatus, message: String) {
+        if (value != status) Log.i(TAG, "stream $value $message")
         status = value
         onStatus(value, message)
     }
@@ -121,11 +125,17 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
                         var channels = 0
                         var epoch = -1
                         var wasMuted = false
+                        // Jitter buffer: audio arrives in bursts (proxies, Wi-Fi), so hold a cushion
+                        // before playing and refill it after an underrun, growing it each time.
+                        var cushion = 1.5f
+                        var primed = false
+                        var written = 0L
+                        var lastUnderruns = 0
                         while (!cancelled) {
                             val frame = PcmFrame.read(input)
                             retry = 1
                             val muted = held || !enabled
-                            if (muted && !wasMuted) output?.run { pause(); flush() }
+                            if (muted && !wasMuted) output?.run { pause(); flush(); written = playbackHeadPosition.toLong() and 0xffffffffL; primed = false }
                             wasMuted = muted
                             if (frame.samples.isEmpty() || muted) continue
                             if (output == null || rate != frame.rate || channels != frame.channels) {
@@ -134,21 +144,42 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
                                 channels = frame.channels
                                 output = track(rate, channels)
                                 epoch = frame.epoch
+                                written = 0
+                                primed = false
+                                lastUnderruns = 0
                             }
                             val track = output!!
                             // A new epoch means the server cut the song short: drop what is queued.
-                            if (epoch != frame.epoch) { track.pause(); track.flush(); epoch = frame.epoch }
+                            if (epoch != frame.epoch) {
+                                track.pause(); track.flush(); epoch = frame.epoch
+                                written = track.playbackHeadPosition.toLong() and 0xffffffffL
+                                primed = false
+                            }
                             track.setVolume(serverVolume * duck)
-                            if (track.playState != AudioTrack.PLAYSTATE_PLAYING) track.play()
-                            if (status != StreamStatus.Playing) set(StreamStatus.Playing, "")
+                            val count = track.underrunCount
+                            if (count > lastUnderruns) {
+                                // Ran dry: pause (keeping what is queued) and refill a bigger cushion.
+                                lastUnderruns = count
+                                underruns++
+                                cushion = (cushion + .5f).coerceAtMost(4f)
+                                if (primed) { track.pause(); primed = false }
+                                Log.i(TAG, "underrun; refilling a ${cushion}s cushion")
+                            }
                             var offset = 0
                             while (offset < frame.samples.size && !cancelled && !held && enabled) {
-                                val written = track.write(frame.samples, offset, frame.samples.size - offset, AudioTrack.WRITE_NON_BLOCKING)
-                                if (written < 0) throw IOException("Audio output unavailable")
-                                offset += written
-                                if (written == 0) Thread.sleep(10)
+                                val count2 = track.write(frame.samples, offset, frame.samples.size - offset, AudioTrack.WRITE_NON_BLOCKING)
+                                if (count2 < 0) throw IOException("Audio output unavailable")
+                                offset += count2
+                                written += count2 / channels
+                                if (!primed) {
+                                    val buffered = written - (track.playbackHeadPosition.toLong() and 0xffffffffL)
+                                    if (buffered >= (cushion * rate).toLong() || count2 == 0) {
+                                        track.play(); primed = true
+                                        if (status != StreamStatus.Playing) set(StreamStatus.Playing, "")
+                                    }
+                                }
+                                if (count2 == 0) Thread.sleep(20)
                             }
-                            underruns = track.underrunCount
                         }
                     }
                 }
@@ -158,7 +189,7 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
             } catch (e: InterruptedException) {
                 break
             } catch (e: Exception) {
-                if (!cancelled) set(StreamStatus.Reconnecting, "Connection interrupted. Reconnecting…")
+                if (!cancelled) { Log.w(TAG, "stream interrupted", e); set(StreamStatus.Reconnecting, "Connection interrupted. Reconnecting…") }
             } finally {
                 output?.release()
                 call = null
@@ -178,8 +209,8 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
         return AudioTrack.Builder()
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA).setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
             .setAudioFormat(AudioFormat.Builder().setSampleRate(rate).setChannelMask(mask).setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-            // About a second of cushion rides out network bursts (the web player uses 1.5–4 s).
-            .setBufferSizeInBytes(maxOf(minimum, rate * channels * 2))
+            // Room for the largest cushion (4 s) plus a burst on top.
+            .setBufferSizeInBytes(maxOf(minimum, rate * channels * 2 * 6))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
     }

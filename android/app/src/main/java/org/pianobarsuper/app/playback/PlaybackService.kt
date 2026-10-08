@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -96,7 +97,7 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
     private var noisyRegistered = false
 
     private val noisy = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) { stopListening() }
+        override fun onReceive(context: Context, intent: Intent) { Log.i(TAG, "headphones unplugged; stop listening"); stopListening() }
     }
 
     override fun onCreate() {
@@ -112,7 +113,7 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
                     AudioManager.AUDIOFOCUS_GAIN -> { current.duck = 1f; current.held = false }
                     AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK -> current.duck = .2f
                     AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> current.held = true
-                    else -> stopListening()
+                    else -> { Log.i(TAG, "audio focus lost ($change); stop listening"); stopListening() }
                 }
             }.build()
         live = LivePlayer(Looper.getMainLooper(), this)
@@ -165,7 +166,7 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             LISTEN -> startListening()
-            STOP_LISTENING -> stopListening()
+            STOP_LISTENING -> { Log.i(TAG, "stop listening requested"); stopListening() }
             PLAY_LOCAL -> playLocal(intent.getStringArrayExtra("ids")?.toList() ?: emptyList(), intent.getIntExtra("index", 0))
         }
         return super.onStartCommand(intent, flags, startId)
@@ -197,9 +198,7 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
         Playback.update { it.copy(listening = true, local = false, stream = StreamStatus.Connecting, message = "") }
     }
 
-    override fun stopListening() = stopListening(stopWhenIdle = true)
-
-    private fun stopListening(stopWhenIdle: Boolean) {
+    override fun stopListening() {
         val current = stream ?: return
         stream = null
         current.stop()
@@ -208,7 +207,8 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
         if (retained) { app.repo.release(); retained = false }
         live.setListening(false, false)
         Playback.update { it.copy(listening = false, stream = StreamStatus.Stopped) }
-        if (stopWhenIdle && exo.mediaItemCount == 0) stopSelf()
+        // Media3 stops the foreground service once nothing plays; stopping the service
+        // here could race its own startForeground and crash the app.
     }
 
     override fun serverPlay(play: Boolean) = app.repo.action("act_songpausetoggle")
@@ -220,7 +220,7 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
         val library = app.phone
         val tracks = ids.mapNotNull { id -> library.tracks.value.firstOrNull { it.id == id } }
         if (tracks.isEmpty()) return
-        stopListening(stopWhenIdle = false)
+        stopListening()
         val items = tracks.map { track ->
             MediaItem.Builder().setMediaId(track.id).setUri(Uri.fromFile(library.file(track.id)))
                 .setMediaMetadata(MediaMetadata.Builder().setTitle(track.label).setArtist(track.artist).setAlbumTitle(track.album)
@@ -253,7 +253,7 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
     }
 
     override fun onDestroy() {
-        stopListening(stopWhenIdle = false)
+        stopListening()
         instance = null
         scope.cancel()
         session.release()
