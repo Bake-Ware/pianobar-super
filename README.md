@@ -154,7 +154,7 @@ up from where it stopped. Pausing pauses the voice with the music; skipping,
 changing station or going online drops a line about the old song.
 
 With a Chatterbox voice, **Expressive sounds** (on by default) lets the DJ drop
-in `[laugh]`, `[chuckle]`, `[sigh]`, `[gasp]`, `[clear throat]` or `[groan]`,
+in `[laugh]`, `[chuckle]`, `[sigh]`, `[gasp]` or `[clear throat]` (about one line in three),
 which the voice performs instead of reading. The server only offers these tags
 when the voice server's `/voices` catalog lists the active voice under the
 `chatterbox` engine. It strips them for any other voice, and always removes

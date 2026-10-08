@@ -801,7 +801,7 @@ class DJ:
     """Optional HTTP LLM/TTS adapters and agent-submitted announcements."""
     # Chatterbox Turbo performs these bracketed sounds; any other bracketed word is read aloud.
     sound_tags = ('laugh', 'chuckle', 'sigh', 'gasp', 'clear throat', 'groan', 'cough', 'sniff', 'shush')
-    offered_tags = ('laugh', 'chuckle', 'sigh', 'gasp', 'clear throat', 'groan')
+    offered_tags = ('laugh', 'chuckle', 'sigh', 'gasp', 'clear throat')
     def __init__(self, session):
         self.session = session
         settings = Configuration().dj()
