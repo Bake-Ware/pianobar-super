@@ -1735,13 +1735,13 @@ class DJ:
         return ' '.join(re.sub(r'\[([^\[\]\n]{1,24})\]', tag, text).split())
 
     def sounds_prompt(self):
-        # Models overuse sounds when merely allowed them, so the server decides:
-        # about one line in three gets one, from a random pair for variety.
+        # Models overuse sounds when merely allowed them (and favour one), so the
+        # server decides: about one line in three gets one, chosen at random.
         chance = random.SystemRandom()
         if self.sounds_ready() and chance.random() < 1 / 3:
-            pair = chance.sample(self.offered_tags, 2)
-            return (f' Include exactly one expressive sound, written exactly as [{pair[0]}] or [{pair[1]}], '
-                    'placed inline where a real DJ would naturally make that sound (not as the first word). No other bracketed text.')
+            sound = chance.choice(self.offered_tags)
+            return (f' Include exactly one expressive sound, written exactly as [{sound}], placed inline where a real DJ '
+                    'would naturally make that sound (not as the first word); shape the line around it. No other bracketed text.')
         return ' No bracketed tags or sound effects.'
 
     def speak(self, message, wait=False):
