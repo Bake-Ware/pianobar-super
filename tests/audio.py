@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare the production PCM output against FFmpeg, without audio hardware."""
 import array
+import math
 import os
 from pathlib import Path
 import select
@@ -60,8 +61,8 @@ with tempfile.TemporaryDirectory(prefix='pianobar-audio-tests-') as temporary:
     speech = array.array('h', subprocess.check_output(['ffmpeg', '-v', 'error', '-i', str(voice),
         '-af', 'aformat=sample_fmts=s16:sample_rates=44100:channel_layouts=stereo', '-f', 's16le', '-'], timeout=15))
 
-    def play(mode):
-        fifo = base / f'output-{mode}'
+    def play(mode, level=0, duck=-12):
+        fifo = base / f'output-{mode}-{level}-{duck}'
         os.mkfifo(fifo)
         audio_fd = os.open(fifo, os.O_RDWR | os.O_NONBLOCK)
         stop = threading.Event()
@@ -74,7 +75,8 @@ with tempfile.TemporaryDirectory(prefix='pianobar-audio-tests-') as temporary:
         reader.start()
         try:
             subprocess.run([str(ROOT / 'tests/player-driver'), str(fixture), str(base / 'empty'),
-                            str(fifo), mode, '0'], env=env, check=True,
+                            str(fifo), mode, '0'], check=True,
+                           env=dict(env, PIANOBAR_TEST_VOICE_LEVEL=str(level), PIANOBAR_TEST_VOICE_DUCK=str(duck)),
                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
             time.sleep(.05)
         finally:
@@ -83,12 +85,28 @@ with tempfile.TemporaryDirectory(prefix='pianobar-audio-tests-') as temporary:
             os.close(audio_fd)
         return array.array('h', bytes(captured))
 
-    # Held music: the line plays alone, then the song from its first sample.
+    def loudness(samples):
+        report = subprocess.run(['ffmpeg', '-nostdin', '-f', 's16le', '-ar', '44100', '-ac', '2', '-i', '-',
+                                 '-af', 'ebur128', '-f', 'null', '-'], input=samples.tobytes(),
+                                capture_output=True, timeout=15).stderr.decode()
+        return float(report.rsplit('I:', 1)[1].split()[0])
+
+    # Held music: the line plays alone, evened out to -16 LUFS whatever its
+    # source level, then the song from its first sample.
     held = play('voice-break')
-    assert held.tolist() == speech.tolist() + music.tolist(), (len(held), len(speech), len(music))
-    # Over the music: same length; the music dips to a quarter over 300 ms, the
-    # voice starts once it is down, and the song returns bit-exact afterwards.
-    mixed = play('voice-over')
+    assert len(held) == len(speech) + len(music), (len(held), len(speech), len(music))
+    assert held[len(speech):].tolist() == music.tolist()
+    leveled = held[:len(speech)]
+    assert abs(loudness(leveled) - -16) < .5, loudness(leveled)
+    gain = max(abs(x) for x in leveled) / max(abs(x) for x in speech)
+    assert max(abs(leveled[i] - speech[i] * gain) for i in range(len(speech))) <= 2
+    # The listener's voice level moves it from there.
+    louder = play('voice-break', level=4)[:len(speech)]
+    assert abs(loudness(louder) - loudness(leveled) - 4) < .2, loudness(louder)
+    speech = leveled
+    # Over the music: same length; the music dips (here to a quarter) over 300 ms,
+    # the voice starts once it is down, and the song returns bit-exact afterwards.
+    mixed = play('voice-over', duck=20 * math.log10(.25))
     assert len(mixed) == len(music), (len(mixed), len(music))
     ramp = int(44100 * .3)  # Frames to move the music gain through its full range.
     dip = round(ramp * .75)  # Frames from full level down to a quarter.
@@ -103,4 +121,8 @@ with tempfile.TemporaryDirectory(prefix='pianobar-audio-tests-') as temporary:
     # Nothing is louder than the song while the music dips before the voice.
     peak = max(abs(x) for x in mixed[:(dip - 3) * 2])
     assert peak <= max(abs(x) for x in music[:(dip - 3) * 2]), peak
-    print('PASS: DJ voice decoded to the output format, mixed over ducked music or played as a break, bit-exact afterwards')
+    # With no dip the music stays at full level and the voice starts at once.
+    flat = play('voice-over', duck=0)
+    assert max(abs(flat[i] - max(-32768, min(32767, music[i] + speech[i]))) for i in range(len(speech))) <= 1
+    assert flat[len(speech):].tolist() == music[len(speech):].tolist()
+    print('PASS: DJ voice decoded to the output format, evened out to one loudness, mixed over music dipped to a set depth or played as a break, bit-exact afterwards')

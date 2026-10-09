@@ -155,6 +155,11 @@
           <p id="dj-voices-status" class="settings-hint" role="status">Voices come from the voice server under Connections.</p>
           <div class="settings-checks"><label class="setting-check"><input id="setting-dj-play_over_music" type="checkbox" checked>Talk over the music</label></div>
           <p class="settings-hint">The music dips while the DJ speaks. Turn this off to pause the music for the DJ instead; the song picks up where it left off.</p>
+          <div class="settings-grid">
+            <label>Voice level <output id="dj-voice_level-value" for="setting-dj-voice_level"></output><input id="setting-dj-voice_level" type="range" min="-10" max="10" step="1" value="0"></label>
+            <label>Music dip <output id="dj-duck_depth-value" for="setting-dj-duck_depth"></output><input id="setting-dj-duck_depth" type="range" min="-30" max="0" step="1" value="-12"></label>
+          </div>
+          <p class="settings-hint">Every line is evened out to one loudness first; voice level moves the DJ from there. Music dip is how far the song drops while the DJ talks over it. Both apply from the next line.</p>
           <div class="settings-checks"><label class="setting-check"><input id="setting-dj-emotes" type="checkbox" checked>Expressive sounds</label></div>
           <p class="settings-hint">Lets the DJ laugh, chuckle, sigh or gasp mid-line. Works with Chatterbox voices; other voices just skip the sounds.</p>
           <div class="dj-try">

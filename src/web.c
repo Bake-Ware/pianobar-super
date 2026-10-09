@@ -1,6 +1,7 @@
 #include "config.h"
 #include <fcntl.h>
 #include <json.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -103,14 +104,21 @@ void BarWebPoll (BarApp_t *app) {
 			}
 		} else if (strcmp (json_object_get_string (type), "dj_voice") == 0) {
 			/* The web server owns the clip file; nothing awaits a reply. */
-			json_object *voice, *overMusic;
+			json_object *voice, *overMusic, *level, *duck;
 			ack = false;
+			/* Optional: the listener's voice level and music dip, in dB. */
+			const double levelDb = json_object_object_get_ex (message, "level", &level) &&
+					(json_object_is_type (level, json_type_double) || json_object_is_type (level, json_type_int)) ?
+					fmax (-20, fmin (20, json_object_get_double (level))) : 0;
+			const double duckDb = json_object_object_get_ex (message, "duck", &duck) &&
+					(json_object_is_type (duck, json_type_double) || json_object_is_type (duck, json_type_int)) ?
+					fmax (-60, fmin (0, json_object_get_double (duck))) : VOICE_DUCK_DB;
 			if (json_object_object_get_ex (message, "voice", &voice) &&
 					json_object_is_type (voice, json_type_int) &&
 					json_object_object_get_ex (message, "overMusic", &overMusic) &&
 					json_object_is_type (overMusic, json_type_boolean)) {
 				BarPlayerLoadVoice (&app->player, json_object_get_string (id),
-						json_object_get_int (voice), json_object_get_boolean (overMusic));
+						json_object_get_int (voice), json_object_get_boolean (overMusic), levelDb, duckDb);
 				BarWebState (app);
 			}
 		} else if (strcmp (json_object_get_string (type), "dj_voice_stop") == 0) {

@@ -1241,8 +1241,14 @@ function renderSetSize() {
   $('set-minutes-field').hidden = !minutes;
 }
 $('setting-dj-set_mode').addEventListener('change', renderSetSize);
+function renderMixLevels() {
+  const level = Number($('setting-dj-voice_level').value), dip = Number($('setting-dj-duck_depth').value);
+  $('dj-voice_level-value').textContent = level === 0 ? '0 dB' : `${level > 0 ? '+' : '−'}${Math.abs(level)} dB`;
+  $('dj-duck_depth-value').textContent = dip === 0 ? 'none' : `−${-dip} dB`;
+}
+for (const key of ['voice_level', 'duck_depth']) $('setting-dj-' + key).addEventListener('input', renderMixLevels);
 showSettingsTab(settingsTab);
-const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'emotes', 'dj_name', 'listener_name', 'hop_songs'];
+const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'emotes', 'voice_level', 'duck_depth', 'dj_name', 'listener_name', 'hop_songs'];
 const settingsKeys = ['user', 'cache_dir', 'cache_songs', 'offline', 'offline_fallback', 'audio_quality', 'audio_buffer_ms'];
 async function loadSettings(force = false) {
   if (settingsBusy || (settingsLoaded && !force)) return;
@@ -1269,10 +1275,11 @@ async function loadSettings(force = false) {
     for (const key of djSettingsKeys) {
       const input = $('setting-dj-' + key);
       if (input.type === 'checkbox') input.checked = !!data.dj[key];
-      else input.value = data.dj[key] || '';
+      else input.value = data.dj[key] ?? '';
       input.disabled = data.dj.overrides.includes(key);
     }
     renderSetSize();
+    renderMixLevels();
     for (const key of ['llm_key', 'tts_key']) {
       $('setting-dj-' + key).value = '';
       $('setting-dj-' + key).disabled = data.dj.overrides.includes(key);
@@ -1318,7 +1325,7 @@ $('settings-form').addEventListener('submit', async event => {
   const dj = {};
   for (const key of djSettingsKeys) {
     const input = $('setting-dj-' + key);
-    const value = input.type === 'checkbox' ? input.checked : (input.type === 'number' ? Number(input.value) : input.value);
+    const value = input.type === 'checkbox' ? input.checked : (['number', 'range'].includes(input.type) ? Number(input.value) : input.value);
     if (!input.disabled && value !== settingsBaseline.dj[key]) dj[key] = value;
   }
   for (const key of ['llm_key', 'tts_key']) {

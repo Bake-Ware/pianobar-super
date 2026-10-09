@@ -64,6 +64,7 @@ typedef struct {
 	unsigned int voiceRate, voiceChannels, voiceId, voiceDoneId;
 	bool voiceOverMusic;
 	float duck; /* current music gain, lowered while the DJ talks */
+	float voiceDuck; /* music gain to dip to under the current line */
 	unsigned int outRate, outChannels; /* format of the last played frame */
 
 	/* measured in seconds */
@@ -106,6 +107,8 @@ void BarPlayerInit (player_t * const p, const BarSettings_t * const settings);
 void BarPlayerReset (player_t * const p);
 void BarPlayerDestroy (player_t * const p);
 BarPlayerMode BarPlayerGetMode (player_t * const player);
+/* Default dip of the music under the DJ, in dB. */
+#define VOICE_DUCK_DB -12.0
 bool BarPlayerLoadVoice (player_t * const player, const char *path,
-		unsigned int id, bool overMusic);
+		unsigned int id, bool overMusic, double levelDb, double duckDb);
 void BarPlayerStopVoice (player_t * const player);

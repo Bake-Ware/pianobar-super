@@ -204,6 +204,8 @@ class DJTests(unittest.TestCase):
         player.settimeout(5)
         packet = json.loads(player.recv(4096))
         self.assertEqual((packet['type'], packet['voice'], packet['overMusic']), ('dj_voice', voice['id'], True))
+        # The player levels the line; the listener's voice level and music dip ride along.
+        self.assertEqual((packet['level'], packet['duck']), (0, -12))
         self.assertEqual(Path(packet['id']).read_bytes(), self.wav)
         self.assertEqual(self.calls[-1][1], dict(text='Coming at ya with some London punk!', voice='radio'))
         state = self.request('/api/state')
@@ -214,6 +216,10 @@ class DJTests(unittest.TestCase):
         self.session.dj.set_options['play_over_music'] = False
         self.request('/api/dj/announce', {'text': 'Holding the music for this one.'})
         self.assertFalse(json.loads(player.recv(4096))['overMusic'])
+        self.session.dj.mix.update(voice_level=4, duck_depth=-20)
+        self.request('/api/dj/announce', {'text': 'A bit louder now.'})
+        packet = json.loads(player.recv(4096))
+        self.assertEqual((packet['level'], packet['duck']), (4, -20))
         self.request('/api/dj/announce', {'text': 'Stale', 'songKey': 'bad'}, expected=400)
         # A line rendered for a song that has since ended is dropped.
         self.session.dj.voice_slots.acquire()
