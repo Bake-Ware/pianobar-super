@@ -27,6 +27,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PrimaryScrollableTabRow
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.Text
@@ -59,6 +60,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.io.File
+import kotlin.math.roundToInt
 
 /**
  * The server's settings, as on the web: one form across five tabs. Values are
@@ -68,6 +70,8 @@ private sealed interface Field { val key: String; val label: String; val hint: S
 private data class TextField(override val key: String, override val label: String, override val hint: String = "",
                              val secret: Boolean = false, val number: IntRange? = null, val multiline: Boolean = false) : Field
 private data class Toggle(override val key: String, override val label: String, override val hint: String = "") : Field
+private data class Level(override val key: String, override val label: String, val range: IntRange,
+                         val format: (Int) -> String, override val hint: String = "", val default: Int = 0) : Field
 private data class Choice(override val key: String, override val label: String, val options: List<Pair<String, String>>, override val hint: String = "") : Field
 
 private val tabs = listOf("Listening", "Pandora", "DJ", "Connections", "Web access")
@@ -104,6 +108,10 @@ private val sections: List<List<Pair<String, List<Field>>>> = listOf(
             Choice("dj.voice", "Voice", emptyList(), "Voices come from the voice server under Connections."),
             Toggle("dj.play_over_music", "Talk over the music", "The music dips while the DJ speaks. Off: the music pauses for the DJ instead."),
             Toggle("dj.emotes", "Expressive sounds", "Lets the DJ laugh, chuckle, sigh or gasp mid-line. Works with Chatterbox voices."),
+            Level("dj.voice_level", "Voice level", -10..10, { if (it == 0) "0 dB" else "%+d dB".format(it).replace("-", "−") },
+                "Every line is evened out to one loudness; this moves the DJ from there."),
+            Level("dj.duck_depth", "Music dip", -30..0, { if (it == 0) "None" else "−${-it} dB" },
+                "How far the song drops while the DJ talks over it. Both apply from the next line.", default = -12),
         ),
         "Picking music" to listOf(
             TextField("dj.theme", "Default station theme", multiline = true),
@@ -179,11 +187,12 @@ fun SettingsScreen(back: () -> Unit) {
             val value: JsonElement = when {
                 field is Toggle -> JsonPrimitive(raw.toBoolean())
                 field is TextField && field.number != null -> JsonPrimitive(raw.toIntOrNull() ?: continue)
+                field is Level -> JsonPrimitive(raw.toIntOrNull() ?: continue)
                 else -> JsonPrimitive(raw)
             }
             if (field is TextField && field.secret) { if (raw.isEmpty()) continue }
             else if (field is Toggle && (field.key.endsWith("clearPassword") || field.key.contains("clear_"))) { if (!raw.toBoolean()) continue }
-            else if (value == old || (old?.jsonPrimitive?.intOrNull != null && value.jsonPrimitive.intOrNull == old.jsonPrimitive.intOrNull && field is TextField && field.number != null)) continue
+            else if (value == old || (old?.jsonPrimitive?.intOrNull != null && value.jsonPrimitive.intOrNull == old.jsonPrimitive.intOrNull && (field is Level || field is TextField && field.number != null))) continue
             val parts = field.key.split(".")
             if (parts.size == 2) {
                 if (parts[0] == "dj" && parts[1] in overrides) continue
@@ -260,6 +269,16 @@ private fun FieldEditor(field: Field, value: String, voices: List<String>?, enab
                     options.forEach { (v, label) -> DropdownMenuItem(text = { Text(label) }, onClick = { onChange(v); open = false }) }
                 }
             }
+        }
+        is Level -> Column(Modifier.fillMaxWidth()) {
+            val level = (value.toIntOrNull() ?: field.default).coerceIn(field.range)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(field.label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                Text(field.format(level), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Slider(level.toFloat(), { onChange(it.roundToInt().toString()) }, enabled = enabled,
+                valueRange = field.range.first.toFloat()..field.range.last.toFloat())
+            if (field.hint.isNotEmpty()) Text(field.hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         is TextField -> OutlinedTextField(value, onChange, Modifier.fillMaxWidth(), enabled = enabled, label = { Text(field.label) },
             supportingText = if (field.hint.isNotEmpty() || field.number != null) ({

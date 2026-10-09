@@ -70,7 +70,9 @@ with tempfile.TemporaryDirectory(prefix='pianobar-settings-') as temporary:
                          {'dj': {'set_songs': 0}}, {'dj': {'set_songs': 31}}, {'dj': {'set_songs': True}},
                          {'dj': {'set_minutes': 121}}, {'dj': {'set_minutes': '15'}},
                          {'dj': {'play_over_music': 'yes'}}, {'dj': {'dj_name': 'x' * 101}},
-                         {'dj': {'listener_name': 'Bake\nInjected'}}]:
+                         {'dj': {'listener_name': 'Bake\nInjected'}}, {'dj': {'voice_level': 11}},
+                         {'dj': {'voice_level': 2.5}}, {'dj': {'voice_level': True}}, {'dj': {'duck_depth': 1}},
+                         {'dj': {'duck_depth': -31}}, {'dj': {'duck_depth': '-12'}}]:
             try:
                 store.save({'settings': settings})
                 raise AssertionError(settings)

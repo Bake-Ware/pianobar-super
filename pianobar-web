@@ -46,7 +46,8 @@ class Configuration:
     dj_defaults = dict(llm_url='', model='', style='A warm, playful radio DJ. Keep it natural, varied and brief.',
                        theme='A varied mix from my saved music', tts_url='', voice='', tts_ca='', metadata_network=True,
                        set_mode='songs', set_songs=1, set_minutes=15, play_over_music=True,
-                       dj_name='', listener_name='', talk=False, hop=False, hop_songs=4, emotes=True)
+                       dj_name='', listener_name='', talk=False, hop=False, hop_songs=4, emotes=True,
+                       voice_level=0, duck_depth=-12)
     dj_environment = dict(llm_url='PIANOBAR_DJ_URL', model='PIANOBAR_DJ_MODEL', llm_key='PIANOBAR_DJ_KEY',
                           style='PIANOBAR_DJ_STYLE', tts_url='PIANOBAR_TTS_URL', voice='PIANOBAR_TTS_VOICE',
                           tts_key='PIANOBAR_TTS_KEY', tts_ca='PIANOBAR_TTS_CA', metadata_network='PIANOBAR_METADATA_NETWORK')
@@ -214,6 +215,12 @@ class Configuration:
                 elif key == 'hop_songs':
                     if type(value) is not int or not 1 <= value <= 20:
                         raise ValueError('Hop stations every 1–20 songs.')
+                elif key == 'voice_level':
+                    if type(value) is not int or not -10 <= value <= 10:
+                        raise ValueError('Voice level must be between -10 and +10 dB.')
+                elif key == 'duck_depth':
+                    if type(value) is not int or not -30 <= value <= 0:
+                        raise ValueError('Music dip must be between -30 and 0 dB.')
                 elif key in ('set_songs', 'set_minutes'):
                     if type(value) is not int or not 1 <= value <= (30 if key == 'set_songs' else 120):
                         raise ValueError('Choose 1–30 songs or 1–120 minutes per DJ set.')
@@ -846,6 +853,8 @@ class DJ:
         self.names = {k: settings[k] for k in ('dj_name', 'listener_name')}
         self.talk = bool(settings.get('talk'))
         self.emotes = settings.get('emotes', True) is not False
+        # How loud the DJ sits over the music, applied as each line is mixed.
+        self.mix = {k: settings[k] for k in ('voice_level', 'duck_depth')}
         # Station hopping: after hop_songs songs on one Pandora station, queue
         # a random other station to start when the current song ends.
         self.hop = bool(settings.get('hop'))
@@ -1642,7 +1651,8 @@ class DJ:
                         raise DJUnavailable('The player has stopped.')
                     path.write_bytes(body)
                     over = self.set_options.get('play_over_music', True) is not False
-                    self.session.status.send(json.dumps(dict(type='dj_voice', id=str(path), voice=serial, overMusic=over)).encode())
+                    self.session.status.send(json.dumps(dict(type='dj_voice', id=str(path), voice=serial, overMusic=over,
+                                                             level=self.mix['voice_level'], duck=self.mix['duck_depth'])).encode())
                     self.voice_state.update(status='on_air')
                 self.session.changed()
             for old in Path(self.voice_dir).glob('line-*'):
@@ -2518,6 +2528,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             session.dj.talk = saved['dj']['talk']
                         if 'hop_songs' in dj_changes:
                             session.dj.hop_songs = saved['dj']['hop_songs']
+                        for key in session.dj.mix:
+                            session.dj.mix[key] = saved['dj'][key]
                         for key in session.dj.set_options:
                             session.dj.set_options[key] = saved['dj'][key]
                         names = {key: saved['dj'][key] for key in session.dj.names}

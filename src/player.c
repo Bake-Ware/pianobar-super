@@ -115,6 +115,7 @@ void BarPlayerInit (player_t * const p, const BarSettings_t * const settings) {
 	p->voiceRate = p->voiceChannels = p->voiceId = p->voiceDoneId = 0;
 	p->voiceOverMusic = true;
 	p->duck = 1.0f;
+	p->voiceDuck = powf (10.0f, VOICE_DUCK_DB / 20.0f);
 	p->outRate = p->outChannels = 0;
 	const char *output = getenv ("PIANOBAR_OUTPUT");
 	if (p->audioFd >= 0 && output != NULL) {
@@ -704,9 +705,13 @@ static bool emit (player_t * const player, const int16_t *data, int frames,
 	return outputOk;
 }
 
-/* Music gain while the DJ talks over it, and the ramp time to get there. */
-#define VOICE_DUCK 0.25f
+/* Ramp time for the music dip while the DJ talks over it. */
 #define VOICE_RAMP_SECS 0.3f
+/* Every line is brought to this loudness before the voice level applies,
+ * so quiet and loud voices sit the same over the music. */
+#define VOICE_TARGET_LUFS -16.0
+#define VOICE_MAX_BOOST_DB 18.0
+#define VOICE_MAX_CUT_DB -12.0
 /* Longest DJ clip accepted, in seconds. */
 #define VOICE_MAX_SECS 120
 
@@ -740,14 +745,15 @@ static void mixVoice (player_t * const player, int16_t *data, int frames,
 	if (!talking && player->duck >= 1.0f) { return; }
 	const float step = 1.0f / (rate * VOICE_RAMP_SECS), volume = voiceVolume (player);
 	for (int i = 0; i < frames; ++i) {
-		const float target = talking && player->voicePos < player->voiceFrames ? VOICE_DUCK : 1.0f;
+		const bool lineLeft = talking && player->voicePos < player->voiceFrames;
+		const float target = lineLeft ? player->voiceDuck : 1.0f;
 		if (player->duck > target) {
 			player->duck = fmaxf (target, player->duck - step);
 		} else if (player->duck < target) {
 			player->duck = fminf (target, player->duck + step);
 		}
 		/* Dip the music first, then talk, like a DJ riding the fader. */
-		const bool speaking = target < 1.0f && player->duck <= target;
+		const bool speaking = lineLeft && player->duck <= target;
 		for (int c = 0; c < channels; ++c) {
 			float v = data[i * channels + c] * player->duck;
 			if (speaking) { v += player->voice[player->voicePos * channels + c] * volume; }
@@ -902,8 +908,82 @@ done:
 }
 
 /*	Queue a DJ line. It replaces any line still playing. */
+/*	Integrated loudness (ITU-R BS.1770: K-weighted, gated 400 ms blocks)
+ *	of interleaved S16 audio, in LUFS; -INFINITY for silence.
+ */
+static double voiceLoudness (const int16_t *samples, size_t frames,
+		unsigned int rate, unsigned int channels) {
+	/* High shelf then high pass, coefficients for any sample rate. */
+	double k = tan (M_PI * 1681.974450955533 / rate), q = 0.7071752369554196;
+	const double vh = pow (10, 3.999843853973347 / 20), vb = pow (vh, 0.4996667741545416);
+	double a0 = 1 + k / q + k * k;
+	const double s[5] = {(vh + vb * k / q + k * k) / a0, 2 * (k * k - vh) / a0,
+			(vh - vb * k / q + k * k) / a0, 2 * (k * k - 1) / a0, (1 - k / q + k * k) / a0};
+	k = tan (M_PI * 38.13547087602444 / rate);
+	q = 0.5003270373238773;
+	a0 = 1 + k / q + k * k;
+	const double h[2] = {2 * (k * k - 1) / a0, (1 - k / q + k * k) / a0};
+
+	const size_t step = rate / 10; /* blocks of four steps, 75% overlap */
+	const size_t steps = step == 0 ? 0 : frames / step;
+	double *energy = calloc (steps + 1, sizeof (*energy));
+	if (energy == NULL) { return -INFINITY; }
+	for (unsigned int c = 0; c < channels; ++c) {
+		double x1 = 0, x2 = 0, y1 = 0, y2 = 0, z1 = 0, z2 = 0;
+		for (size_t i = 0; i < steps * step; ++i) {
+			const double x = samples[i * channels + c] / 32768.0;
+			const double y = s[0] * x + s[1] * x1 + s[2] * x2 - s[3] * y1 - s[4] * y2;
+			const double z = y - 2 * y1 + y2 - h[0] * z1 - h[1] * z2;
+			x2 = x1; x1 = x; y2 = y1; y1 = y; z2 = z1; z1 = z;
+			energy[i / step] += z * z;
+		}
+	}
+	/* Mean square per block; a clip under 400 ms is one block. */
+	const size_t span = steps < 4 ? steps : 4, blocks = steps < 4 ? (steps > 0) : steps - 3;
+	double *block = calloc (blocks + 1, sizeof (*block));
+	if (block == NULL) { free (energy); return -INFINITY; }
+	for (size_t b = 0; b < blocks; ++b) {
+		for (size_t j = 0; j < span; ++j) { block[b] += energy[b + j]; }
+		block[b] /= (double) span * step;
+	}
+	free (energy);
+	double loudness = -INFINITY;
+	for (int pass = 0; pass < 2; ++pass) {
+		/* Absolute gate at -70 LUFS, then relative gate 10 LU below. */
+		const double gate = pass == 0 ? -70 : loudness - 10;
+		double sum = 0;
+		size_t kept = 0;
+		for (size_t b = 0; b < blocks; ++b) {
+			if (block[b] > 0 && -0.691 + 10 * log10 (block[b]) > gate) { sum += block[b]; ++kept; }
+		}
+		if (kept == 0) { break; }
+		loudness = -0.691 + 10 * log10 (sum / kept);
+	}
+	free (block);
+	return loudness;
+}
+
+/*	Bring a line to the target loudness plus the listener's voice level, in
+ *	place. Peaks that would clip are rounded off rather than squared off.
+ */
+static void levelVoice (int16_t *samples, size_t frames, unsigned int rate,
+		unsigned int channels, double levelDb) {
+	const double loudness = voiceLoudness (samples, frames, rate, channels);
+	double db = isfinite (loudness) ? VOICE_TARGET_LUFS - loudness : 0;
+	db = fmin (VOICE_MAX_BOOST_DB, fmax (VOICE_MAX_CUT_DB, db)) + levelDb;
+	const float gain = powf (10.0f, db / 20.0f), knee = 0.7f;
+	for (size_t i = 0; i < frames * channels; ++i) {
+		float v = samples[i] / 32768.0f * gain;
+		const float a = fabsf (v);
+		if (a > knee) {
+			v = copysignf (knee + (1 - knee) * tanhf ((a - knee) / (1 - knee)), v);
+		}
+		samples[i] = clip16 (v * 32767.0f);
+	}
+}
+
 bool BarPlayerLoadVoice (player_t * const player, const char *path,
-		unsigned int id, bool overMusic) {
+		unsigned int id, bool overMusic, double levelDb, double duckDb) {
 	pthread_mutex_lock (&player->lock);
 	unsigned int rate = player->outRate, channels = player->outChannels;
 	pthread_mutex_unlock (&player->lock);
@@ -913,7 +993,9 @@ bool BarPlayerLoadVoice (player_t * const player, const char *path,
 	if (channels == 0) { channels = 2; }
 	size_t frames = 0;
 	int16_t *samples = decodeVoice (path, rate, channels, &frames);
+	if (samples != NULL) { levelVoice (samples, frames, rate, channels, levelDb); }
 	pthread_mutex_lock (&player->lock);
+	player->voiceDuck = powf (10.0f, fminf (0.0f, (float) duckDb) / 20.0f);
 	free (player->voice);
 	player->voice = samples;
 	player->voiceFrames = frames;

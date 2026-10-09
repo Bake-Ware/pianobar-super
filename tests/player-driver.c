@@ -33,12 +33,14 @@ int main (int argc, char **argv) {
 	player.mode = PLAYER_WAITING;
 	if (strncmp (argv[4], "voice", 5) == 0) {
 		/* A DJ line queued before the song: mixed over it, or played as a break. */
+		const char *levelEnv = getenv ("PIANOBAR_TEST_VOICE_LEVEL"), *duckEnv = getenv ("PIANOBAR_TEST_VOICE_DUCK");
+		const double level = levelEnv != NULL ? atof (levelEnv) : 0, duck = duckEnv != NULL ? atof (duckEnv) : VOICE_DUCK_DB;
 		assert (BarPlayerLoadVoice (&player, getenv ("PIANOBAR_TEST_VOICE"), 7,
-				strcmp (argv[4], "voice-over") == 0));
-		assert (!BarPlayerLoadVoice (&player, argv[1] + strlen (argv[1]), 8, true));
+				strcmp (argv[4], "voice-over") == 0, level, duck));
+		assert (!BarPlayerLoadVoice (&player, argv[1] + strlen (argv[1]), 8, true, 0, VOICE_DUCK_DB));
 		assert (player.voiceDoneId == 8 && player.voice == NULL);
 		assert (BarPlayerLoadVoice (&player, getenv ("PIANOBAR_TEST_VOICE"), 9,
-				strcmp (argv[4], "voice-over") == 0));
+				strcmp (argv[4], "voice-over") == 0, level, duck));
 	}
 	if (strcmp (argv[4], "queue") == 0) {
 		AVFormatContext *input = NULL;
