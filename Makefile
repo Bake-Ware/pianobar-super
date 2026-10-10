@@ -190,3 +190,4 @@ test: pianobar tests/player-driver tests/stations-driver
 	python3 tests/network.py
 	python3 tests/downloads.py
 	python3 tests/settings.py
+	python3 tests/android_update.py

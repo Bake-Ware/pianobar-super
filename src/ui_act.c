@@ -468,7 +468,10 @@ BarUiActCallback(BarUiActRenameStation) {
 	assert (selStation != NULL);
 
 	BarUiMsg (&app->settings, MSG_QUESTION, "New name: ");
-	if (BarReadlineStr (lineBuf, sizeof (lineBuf), &app->input, BAR_RL_DEFAULT) > 0) {
+	BarWebPromptKind ("station_name");
+	size_t nameLen = BarReadlineStr (lineBuf, sizeof (lineBuf), &app->input, BAR_RL_DEFAULT);
+	BarWebPromptKind (NULL);
+	if (nameLen > 0) {
 		PianoRequestDataRenameStation_t reqData;
 		if (!BarTransformIfShared (app, selStation)) {
 			return;

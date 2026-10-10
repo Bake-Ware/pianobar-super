@@ -1248,7 +1248,91 @@ function renderMixLevels() {
 }
 for (const key of ['voice_level', 'duck_depth']) $('setting-dj-' + key).addEventListener('input', renderMixLevels);
 showSettingsTab(settingsTab);
-const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'emotes', 'voice_level', 'duck_depth', 'dj_name', 'listener_name', 'hop_songs'];
+const djSettingsKeys = ['llm_url', 'model', 'style', 'theme', 'tts_url', 'voice', 'tts_ca', 'metadata_network', 'set_mode', 'set_songs', 'set_minutes', 'play_over_music', 'emotes', 'voice_level', 'duck_depth', 'dj_name', 'listener_name', 'hop_songs', 'weather_place', 'weather_lat', 'weather_lon'];
+// The DJ's MCP servers are edited as a list and saved whole; blank auth keeps the saved one.
+let mcpServers = [], mcpDirty = false;
+function renderMcpServers() {
+  const list = $('mcp-servers');
+  list.replaceChildren();
+  if (!mcpServers.length) {
+    const empty = document.createElement('p');
+    empty.className = 'settings-hint';
+    empty.textContent = 'No tool servers yet. The DJ still has the weather and local time.';
+    list.append(empty);
+  }
+  mcpServers.forEach((server, index) => {
+    const card = document.createElement('div');
+    card.className = 'mcp-server';
+    const grid = document.createElement('div');
+    grid.className = 'settings-grid';
+    const field = (label, key, attributes = {}) => {
+      const wrapper = document.createElement('label');
+      wrapper.textContent = label;
+      const input = document.createElement('input');
+      Object.assign(input, {maxLength: 450, autocomplete: 'off'}, attributes);
+      input.value = server[key] || '';
+      input.addEventListener('input', () => { server[key] = input.value; mcpDirty = true; });
+      wrapper.append(input);
+      grid.append(wrapper);
+      return wrapper;
+    };
+    field('Name', 'name', {maxLength: 60, placeholder: 'Rook'});
+    field('Endpoint URL', 'url', {type: 'url', placeholder: 'https://your-server/mcp'});
+    field('Auth', 'auth', {type: 'password', autocomplete: 'new-password',
+      placeholder: server.authSet ? 'Saved; leave blank to keep' : 'Optional bearer token or full header value'});
+    field('Note for the DJ', 'hint', {placeholder: 'What should the DJ use this for?'}).classList.add('settings-wide');
+    const checks = document.createElement('div');
+    checks.className = 'settings-checks';
+    const check = (label, key) => {
+      const wrapper = document.createElement('label');
+      wrapper.className = 'setting-check';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = !!server[key];
+      input.addEventListener('change', () => { server[key] = input.checked; mcpDirty = true; });
+      wrapper.append(input, label);
+      checks.append(wrapper);
+    };
+    check('Enabled', 'enabled');
+    if (server.authSet) check('Forget saved auth', 'clear_auth');
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'mcp-remove';
+    remove.textContent = 'Remove';
+    remove.addEventListener('click', () => { mcpServers.splice(index, 1); mcpDirty = true; renderMcpServers(); });
+    checks.append(remove);
+    card.append(grid, checks);
+    list.append(card);
+  });
+  $('add-mcp-server').disabled = mcpServers.length >= 8;
+}
+$('add-mcp-server').addEventListener('click', () => {
+  mcpServers.push({name: '', url: '', hint: '', auth: '', enabled: true});
+  mcpDirty = true;
+  renderMcpServers();
+  $('mcp-servers').lastElementChild.querySelector('input').focus();
+});
+$('check-mcp-servers').addEventListener('click', async () => {
+  $('mcp-status').textContent = 'Checking…';
+  try {
+    const response = await fetch('/api/dj/tools');
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Could not check the servers.');
+    $('mcp-status').textContent = data.servers.length ? data.servers.map(server => server.ok
+      ? `${server.name}: ${server.tools.length} tool${server.tools.length === 1 ? '' : 's'}${server.tools.length ? ' (' + server.tools.slice(0, 6).join(', ') + (server.tools.length > 6 ? ', …' : '') + ')' : ''}.`
+      : `${server.name}: ${server.error || 'not reachable'}`).join(' ') : 'No enabled servers are saved yet.';
+  } catch (error) { $('mcp-status').textContent = error.message; }
+});
+$('station-mcp-url').textContent = location.origin + '/mcp';
+function mcpChanges() {
+  return mcpServers.map(server => {
+    const item = {name: server.name.trim(), url: server.url.trim(), hint: server.hint || '', enabled: !!server.enabled};
+    if (server.id) item.id = server.id;
+    if (server.auth) item.auth = server.auth;
+    if (server.clear_auth) item.clear_auth = true;
+    return item;
+  });
+}
 const settingsKeys = ['user', 'cache_dir', 'cache_songs', 'offline', 'offline_fallback', 'audio_quality', 'audio_buffer_ms'];
 async function loadSettings(force = false) {
   if (settingsBusy || (settingsLoaded && !force)) return;
@@ -1264,7 +1348,7 @@ async function loadSettings(force = false) {
     $('android-download').href = apk ? '/pianobar.apk' : 'https://github.com/Bake-Ware/pianobar-super/releases/download/android-2026.09.10/pianobar-2026.09.10.apk';
     $('android-download').toggleAttribute('download', !!apk);
     $('android-download-note').hidden = !apk;
-    if (apk) $('android-download-note').textContent = `From this server · ${(apk.size / 1048576).toFixed(1)} MB · updated ${new Date(apk.updated * 1000).toLocaleDateString()}. If Android says the app isn’t installed, uninstall an older pianobar app first.`;
+    if (apk) $('android-download-note').textContent = `From this server · ${apk.versionName ? `version ${apk.versionName} · ` : ''}${(apk.size / 1048576).toFixed(1)} MB · updated ${new Date(apk.updated * 1000).toLocaleDateString()}. If Android says the app isn’t installed, uninstall an older pianobar app first.`;
     for (const key of settingsKeys) {
       const input = $('setting-' + key);
       if (input.type === 'checkbox') input.checked = data[key];
@@ -1280,6 +1364,9 @@ async function loadSettings(force = false) {
     }
     renderSetSize();
     renderMixLevels();
+    mcpServers = (data.dj.mcp_servers || []).map(server => ({...server, auth: '', clear_auth: false}));
+    mcpDirty = false;
+    renderMcpServers();
     for (const key of ['llm_key', 'tts_key']) {
       $('setting-dj-' + key).value = '';
       $('setting-dj-' + key).disabled = data.dj.overrides.includes(key);
@@ -1332,6 +1419,7 @@ $('settings-form').addEventListener('submit', async event => {
     if ($('setting-dj-' + key).value) dj[key] = $('setting-dj-' + key).value;
     if ($('setting-dj-clear_' + key).checked) dj['clear_' + key] = true;
   }
+  if (mcpDirty) dj.mcp_servers = mcpChanges();
   if (Object.keys(dj).length) changes.dj = dj;
   settingsBusy = true;
   updateDisabled();

@@ -42,6 +42,7 @@ THE SOFTWARE.
 #include "ui.h"
 #include "debug.h"
 #include "ui_readline.h"
+#include "web.h"
 
 typedef int (*BarSortFunc_t) (const void *, const void *);
 
@@ -618,8 +619,11 @@ char *BarUiSelectMusicId (BarApp_t *app, PianoStation_t *station,
 	PianoSong_t *tmpSong;
 
 	BarUiMsg (&app->settings, MSG_QUESTION, "%s", msg);
-	if (BarReadlineStr (lineBuf, sizeof (lineBuf), &app->input,
-			BAR_RL_DEFAULT) > 0) {
+	BarWebPromptKind ("search");
+	size_t queryLen = BarReadlineStr (lineBuf, sizeof (lineBuf), &app->input,
+			BAR_RL_DEFAULT);
+	BarWebPromptKind (NULL);
+	if (queryLen > 0) {
 		PianoReturn_t pRet;
 		CURLcode wRet;
 		PianoRequestDataSearch_t reqData;

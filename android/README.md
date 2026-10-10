@@ -72,6 +72,43 @@ server's live 16-bit PCM through `AudioTrack`.
   headphones stops listening.
 - **Connection drops:** the app reconnects with backoff.
 
+## Updates from your server
+
+The app updates itself from the server it is connected to. A server that has an
+APK at `web/pianobar.apk` describes it at `GET /api/android/version`, with the
+`versionCode`, `versionName` and `sha256` read from the file itself.
+
+- **When it checks:** when the app opens, about every six hours while there is a
+  network (WorkManager), and from **More → Check for updates**.
+- **What it checks:** a build is only installed if its `versionCode` is higher than
+  this one's, it matches the published sha256, it is this app's package, and it is
+  signed by exactly the same certificates as the installed app. An APK signed by
+  anyone else is refused.
+- **How it installs:**
+  - **Rooted devices:** `pm install -r` runs as root, without a prompt. The app
+    tries `su -c` first. On Bakecar, which has no `su`, it uses the firmware's
+    `/data/linux-tools/rsu`.
+  - **Everything else:** Android's PackageInstaller. On Android 12 and newer a
+    self-update goes in unattended once the app installed itself the previous
+    time. Otherwise Android shows its confirmation, or a notification if the app
+    isn't open.
+  - **First time:** the app asks once for Android's **Install unknown apps**
+    permission. The switch is also in More.
+- **While you listen:** a downloaded update waits until this phone stops playing.
+  Tap **Install now** or the notification to install it right away.
+
+## Home-screen widget
+
+The **pianobar** widget shows the current song's artwork, title, artist and
+station, and whether this phone is listening.
+
+- **Buttons:** listen on this phone, love and next. Tap anywhere else to open the
+  app.
+- **Sizes:** it can be resized. One row gives a compact strip. Taller sizes, such
+  as on a car head unit, use larger artwork and text.
+- **Updating:** the widget follows the app while it runs. If the app isn't
+  running, the widget fetches the song once when it is added or refreshed.
+
 ## Downloads and offline
 
 **Download to this phone** fetches a saved song from `/api/download/…` as tagged
@@ -122,7 +159,9 @@ Unit tests cover:
 - the API client against a mock server: credentials only for the origin, no
   Origin header, cookies kept, redirects and HTML meaning "sign in", error
   messages;
-- snapshot parsing and DJ sound-tag display.
+- snapshot parsing and DJ sound-tag display;
+- update rules (newer build, sha256, matching signers, the root `pm install` command);
+- what the widget shows when playing, idle, offline or signed out.
 
 To try the app against a local server, run `pianobar --offline --port 18765` on
 the development machine, then `adb reverse tcp:18765 tcp:18765`, and connect the

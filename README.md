@@ -184,7 +184,8 @@ Alternatively, set these environment variables before starting the server, or pu
 corresponding fields in private `$XDG_CONFIG_HOME/pianobar/dj.json` (default
 `~/.config/pianobar/dj.json`). Environment variables take precedence. JSON fields
 are `llm_url`, `model`, `llm_key`, `style`, `tts_url`, `voice`, `tts_key`, optional `tts_ca`,
-`talk`, `hop` and `hop_songs`.
+`talk`, `hop`, `hop_songs`, `weather_lat`, `weather_lon`, `weather_place` and
+`mcp_servers`.
 
 | Variable | Purpose |
 | --- | --- |
@@ -247,6 +248,39 @@ limited to 700 characters. Generation and voice requests have bounded concurrenc
 and timeouts; repeated introductions for the same song and personality reuse the
 session cache.
 
+### What the DJ knows
+
+Every intro sees the DJ's own last 20 lines (so it can avoid repeating an
+opening, a phrase or a name), the listener's recent activity (skips, loves,
+bans, station changes, station searches, calls and requests; never passwords or
+menu picks) and the local time. Both lists are kept in private
+`dj_context.json` next to `dj.json` and survive restarts. A cached repeat of the
+same song's intro is not recorded twice.
+
+Intros are written in a short tool-calling loop (OpenAI `tool_calls` or Ollama
+style): the model may check the weather (Open-Meteo, no key, cached 15 minutes;
+San Antonio, TX by default, set `weather_lat`/`weather_lon`/`weather_place` in
+Settings → DJ) or call tools on the MCP servers listed under Settings → DJ →
+Tool servers. Each server has a URL, optional auth (a bare token is sent as a
+bearer token; kept on the server and never shown again) and a note telling the
+DJ what it is for. The loop is bounded to 3 tool rounds and about 12 seconds, and
+falls back to a plain intro if the provider rejects tools or a server is slow.
+Tool output is passed to the model as untrusted data. `GET /api/dj/tools` checks
+each server and lists its tools.
+
+### The station's MCP endpoint
+
+`POST /mcp` is a Streamable HTTP MCP server (JSON responses) behind the same web
+authentication, so an agent can call into the station:
+
+| Tool | Behavior |
+| --- | --- |
+| `now_playing` | Current and upcoming song, and whether the DJ is talking |
+| `call_in` | `{message, caller?}`: the DJ answers on air when someone is listening; the call is remembered for later intros |
+| `request_song` | `{query, caller?}`: queues a matching saved song when the station plays saved music, otherwise notes the request |
+| `announce` | `{text}`: the DJ voice reads a line word for word |
+| `dj_memory` | The DJ's recent lines and the listener's recent activity |
+
 ## Android and mobile
 
 <img src="docs/screenshots/player-mobile.png" alt="Mobile player with artwork and touch controls" width="300">
@@ -261,6 +295,9 @@ your installed browser; see the Android README for proxy login limitations.
 For offline device playback, download songs from the web Library, then use
 **Downloads → Add downloaded tracks** in the APK to import them. These local copies
 play without the server, including with the screen off.
+To serve your own build, copy it to `web/pianobar.apk` next to the web files. The
+app checks `GET /api/android/version` (`versionCode`, `versionName`, `sha256`, read
+from the APK itself) and updates itself from `/pianobar.apk`.
 See [Android setup, builds, and package migration](android/README.md).
 
 ## Terminal and development

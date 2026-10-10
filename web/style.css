@@ -1759,3 +1759,9 @@ body[data-pinned="true"] #widget-pin {
 .playlist-crumb[hidden], .breadcrumb-separator[hidden] { display: none; }
 .settings-grid input[type="range"] { padding: 6px 0; border: 0; background: none; accent-color: var(--orange); }
 .settings-grid label output { font-variant-numeric: tabular-nums; color: var(--muted); }
+.mcp-servers { display: grid; gap: 14px; }
+.mcp-server { padding: 16px; border: 1px solid var(--line); background: var(--paper); }
+.mcp-server .settings-checks { margin-top: 14px; grid-template-columns: repeat(auto-fit, minmax(160px, max-content)); align-items: center; gap: 14px 22px; }
+.mcp-server .mcp-remove { justify-self: start; padding: 8px 12px; border: 1px solid var(--line); background: var(--selected); color: var(--ink); }
+.mcp-actions { margin-top: 14px; }
+#station-mcp-url { user-select: all; }

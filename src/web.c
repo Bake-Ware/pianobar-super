@@ -13,6 +13,7 @@
 static int statusFd = -1;
 /* Borrowed only while the main thread waits for the deletion answer. */
 static const char *deleteStationName = NULL;
+static const char *promptKind = NULL;
 
 void BarWebInit (void) {
 	const char *value = getenv ("PIANOBAR_STATUS_FD");
@@ -62,6 +63,12 @@ void BarWebDeleteConfirmation (const char *stationName) {
 	deleteStationName = stationName;
 }
 
+/* Labels the next free-text prompts (a search, a station name) so the web
+ * host may remember them; unlabelled answers such as the login email are not. */
+void BarWebPromptKind (const char *kind) {
+	promptKind = kind;
+}
+
 void BarWebPrompt (bool active, bool secret, bool line, size_t limit, const char *mask) {
 	if (statusFd < 0) { return; }
 	json_object *object = json_object_new_object ();
@@ -70,6 +77,8 @@ void BarWebPrompt (bool active, bool secret, bool line, size_t limit, const char
 	if (deleteStationName != NULL) {
 		string (object, "kind", "delete_station");
 		string (object, "station", deleteStationName);
+	} else if (promptKind != NULL) {
+		string (object, "kind", promptKind);
 	}
 	json_object_object_add (object, "active", json_object_new_boolean (active));
 	json_object_object_add (object, "secret", json_object_new_boolean (secret));

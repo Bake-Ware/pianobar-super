@@ -38,6 +38,7 @@ import kotlinx.coroutines.withContext
 import org.pianobarsuper.app.PianobarApp
 import org.pianobarsuper.app.R
 import org.pianobarsuper.app.ui.MainActivity
+import org.pianobarsuper.app.widget.WidgetListenActivity
 
 /** What this phone is playing: the server's live stream, downloaded songs, or nothing. */
 data class PhonePlayback(
@@ -79,6 +80,12 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
         const val LISTEN = "pianobar.listen"
         const val STOP_LISTENING = "pianobar.stop_listening"
         const val PLAY_LOCAL = "pianobar.play_local"
+        /**
+         * How long a stopped stream stays connected (heartbeats keep its server lease), long
+         * enough for a drive-through order. Media3 keeps the service in the foreground for the
+         * same time after playback stops, so the process isn't frozen meanwhile.
+         */
+        const val WARM_MS = 10 * 60_000L
         @Volatile var instance: PlaybackService? = null
             private set
     }
@@ -93,6 +100,9 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
     private lateinit var audio: AudioManager
     private lateinit var focus: AudioFocusRequest
     private var stream: LiveStream? = null
+    /** A stopped stream kept connected for a while, so listening again starts quickly. */
+    private var parked: LiveStream? = null
+    private val expireParked = Runnable { parked?.stop(); parked = null }
     private var retained = false
     private var noisyRegistered = false
 
@@ -130,6 +140,7 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
         session = MediaSession.Builder(this, live).setSessionActivity(open).build()
         // Show the media notification without waiting for a controller to connect.
         addSession(session)
+        setForegroundServiceTimeoutMs(WARM_MS)
         setMediaNotificationProvider(DefaultMediaNotificationProvider.Builder(this).build().apply { setSmallIcon(R.drawable.ic_note) })
         scope.launch {
             app.repo.snapshot.collect { snapshot ->
@@ -165,7 +176,7 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            LISTEN -> startListening()
+            LISTEN -> { ListenTimer.begin("app"); startListening() }
             STOP_LISTENING -> { Log.i(TAG, "stop listening requested"); stopListening() }
             PLAY_LOCAL -> playLocal(intent.getStringArrayExtra("ids")?.toList() ?: emptyList(), intent.getIntExtra("index", 0))
         }
@@ -176,7 +187,8 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
 
     override fun startListening() {
         if (stream != null) return
-        val api = app.repo.api.value ?: run { Playback.update { it.copy(message = "Choose your server first.") }; return }
+        val api = app.repo.api.value ?: run { ListenTimer.cancel(); Playback.update { it.copy(message = "Choose your server first.") }; return }
+        ListenTimer.mark("service")
         if (exo.isPlaying || exo.mediaItemCount > 0) { exo.stop(); exo.clearMediaItems() }
         session.player = live
         audio.requestAudioFocus(focus)
@@ -185,11 +197,25 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
             noisyRegistered = true
         }
         if (!retained) { app.repo.retain(); retained = true }
-        val created = LiveStream(api, app.repo.store.deviceName) { status, message ->
+        main.removeCallbacks(expireParked)
+        val warm = parked?.takeIf { it.api === api }
+        parked = null
+        if (warm != null && warm.resume()) {
+            ListenTimer.mark("resumed parked stream")
+            stream = warm
+            live.setListening(true, false)
+            Playback.update { it.copy(listening = true, local = false, stream = StreamStatus.Waiting, message = "") }
+            return
+        }
+        warm?.stop()
+        lateinit var created: LiveStream
+        created = LiveStream(api, app.repo.store.deviceName) { status, message ->
             main.post {
-                live.setListening(stream != null, status == StreamStatus.Playing || status == StreamStatus.Waiting)
+                // A parked or replaced stream doesn't speak for this phone.
+                if (stream !== created) return@post
+                live.setListening(true, status == StreamStatus.Playing || status == StreamStatus.Waiting)
                 Playback.update { it.copy(stream = status, message = message) }
-                if (status == StreamStatus.SignInRequired) { app.repo.reconnect(); stopListening() }
+                if (status == StreamStatus.SignInRequired) { app.repo.reconnect(); stopListening(keepWarm = false) }
             }
         }
         stream = created
@@ -198,10 +224,18 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
         Playback.update { it.copy(listening = true, local = false, stream = StreamStatus.Connecting, message = "") }
     }
 
-    override fun stopListening() {
+    override fun stopListening() = stopListening(keepWarm = true)
+
+    /** Silences this phone at once. With [keepWarm] the server stops sending but the connection stays briefly. */
+    private fun stopListening(keepWarm: Boolean) {
         val current = stream ?: return
         stream = null
-        current.stop()
+        ListenTimer.cancel()
+        if (keepWarm) {
+            current.park()
+            parked = current
+            main.postDelayed(expireParked, WARM_MS)
+        } else current.stop()
         audio.abandonAudioFocusRequest(focus)
         if (noisyRegistered) { unregisterReceiver(noisy); noisyRegistered = false }
         if (retained) { app.repo.release(); retained = false }
@@ -248,12 +282,16 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        // The widget's listen button closes its own short-lived task; that isn't the user leaving.
+        if (rootIntent?.component?.className == WidgetListenActivity::class.java.name) return
         val player = session.player
         if (!player.playWhenReady || player.mediaItemCount == 0 || player.playbackState == Player.STATE_IDLE) stopSelf()
     }
 
     override fun onDestroy() {
-        stopListening()
+        stopListening(keepWarm = false)
+        main.removeCallbacks(expireParked)
+        expireParked.run()
         instance = null
         scope.cancel()
         session.release()

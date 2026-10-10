@@ -1,0 +1,8 @@
+<resources>
+    <string name="widget_description">Now playing, with listen, love and next</string>
+    <string name="widget_listen">Listen on this phone</string>
+    <string name="widget_next">Next song</string>
+    <string name="widget_love">Love song</string>
+    <string name="widget_art">Album art</string>
+    <string name="widget_open">Open pianobar</string>
+</resources>

@@ -6,12 +6,16 @@ import http.client
 import http.server
 import json
 from pathlib import Path
+import os
 import runpy
 import subprocess
 import tempfile
 import threading
 
 ROOT = Path(__file__).resolve().parents[1]
+# Keep the DJ's memory and settings out of the real config folder.
+CONFIG = tempfile.TemporaryDirectory()
+os.environ['XDG_CONFIG_HOME'] = CONFIG.name
 module = runpy.run_path(str(ROOT / 'pianobar-web'))
 with tempfile.TemporaryDirectory(prefix='pianobar-download-tests-') as temporary:
     base = Path(temporary)

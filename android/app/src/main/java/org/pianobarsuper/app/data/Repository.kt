@@ -148,6 +148,22 @@ class Repository(private val app: Context) {
         }
     }
 
+    /** One fresh snapshot when nothing is polling, such as for the home-screen widget. */
+    suspend fun refreshOnce() {
+        if (watchJob?.isActive == true) return
+        val api = _api.value ?: return
+        try {
+            _snapshot.value = json.decodeFromJsonElement<Snapshot>(api.get("api/state?after=-1"))
+            _connection.value = Connection.Online
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: LoginRequired) {
+            _connection.value = Connection.SignInRequired
+        } catch (e: Exception) {
+            _connection.value = Connection.Unreachable(e.message ?: "Can’t reach the server.")
+        }
+    }
+
     // ---- Commands --------------------------------------------------------------------------
 
     /** Run a call, turning server errors into a message; null on failure. */
