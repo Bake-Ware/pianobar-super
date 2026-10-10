@@ -1281,6 +1281,18 @@ function renderMcpServers() {
     field('Auth', 'auth', {type: 'password', autocomplete: 'new-password',
       placeholder: server.authSet ? 'Saved; leave blank to keep' : 'Optional bearer token or full header value'});
     field('Note for the DJ', 'hint', {placeholder: 'What should the DJ use this for?'}).classList.add('settings-wide');
+    const every = field('Offer on about 1 in N intros', 'every', {type: 'number', min: 1, max: 100, step: 1}).querySelector('input');
+    every.value = server.every || 1;
+    // Only these tools (and argument values) reach the DJ; checked on the server before every call.
+    const allow = document.createElement('label');
+    allow.className = 'settings-wide';
+    allow.textContent = 'Allowed tools (JSON; blank allows every tool)';
+    const allowInput = document.createElement('textarea');
+    Object.assign(allowInput, {rows: 4, maxLength: 6000, spellcheck: false, value: server.allowText,
+      placeholder: '{"rook_task": {"action": ["deck", "search", "get"]}, "rook_presence": {}}'});
+    allowInput.addEventListener('input', () => { server.allowText = allowInput.value; mcpDirty = true; });
+    allow.append(allowInput);
+    grid.append(allow);
     const checks = document.createElement('div');
     checks.className = 'settings-checks';
     const check = (label, key) => {
@@ -1307,7 +1319,7 @@ function renderMcpServers() {
   $('add-mcp-server').disabled = mcpServers.length >= 8;
 }
 $('add-mcp-server').addEventListener('click', () => {
-  mcpServers.push({name: '', url: '', hint: '', auth: '', enabled: true});
+  mcpServers.push({name: '', url: '', hint: '', auth: '', enabled: true, every: 1, allowText: ''});
   mcpDirty = true;
   renderMcpServers();
   $('mcp-servers').lastElementChild.querySelector('input').focus();
@@ -1319,14 +1331,19 @@ $('check-mcp-servers').addEventListener('click', async () => {
     const data = await response.json();
     if (!response.ok) throw new Error(data.error || 'Could not check the servers.');
     $('mcp-status').textContent = data.servers.length ? data.servers.map(server => server.ok
-      ? `${server.name}: ${server.tools.length} tool${server.tools.length === 1 ? '' : 's'}${server.tools.length ? ' (' + server.tools.slice(0, 6).join(', ') + (server.tools.length > 6 ? ', …' : '') + ')' : ''}.`
+      ? `${server.name}: ${server.tools.length} tool${server.tools.length === 1 ? '' : 's'}${server.tools.length ? ' (' + server.tools.slice(0, 6).join(', ') + (server.tools.length > 6 ? ', …' : '') + ')' : ''}.${server.hidden?.length ? ` ${server.hidden.length} more not allowed.` : ''}`
       : `${server.name}: ${server.error || 'not reachable'}`).join(' ') : 'No enabled servers are saved yet.';
   } catch (error) { $('mcp-status').textContent = error.message; }
 });
 $('station-mcp-url').textContent = location.origin + '/mcp';
 function mcpChanges() {
   return mcpServers.map(server => {
-    const item = {name: server.name.trim(), url: server.url.trim(), hint: server.hint || '', enabled: !!server.enabled};
+    const item = {name: server.name.trim(), url: server.url.trim(), hint: server.hint || '', enabled: !!server.enabled,
+      every: Math.round(Number(server.every) || 1), allow: null};
+    if (server.allowText.trim()) {
+      try { item.allow = JSON.parse(server.allowText); }
+      catch { throw new Error(`Allowed tools for ${item.name || 'a tool server'} must be valid JSON.`); }
+    }
     if (server.id) item.id = server.id;
     if (server.auth) item.auth = server.auth;
     if (server.clear_auth) item.clear_auth = true;
@@ -1364,7 +1381,8 @@ async function loadSettings(force = false) {
     }
     renderSetSize();
     renderMixLevels();
-    mcpServers = (data.dj.mcp_servers || []).map(server => ({...server, auth: '', clear_auth: false}));
+    mcpServers = (data.dj.mcp_servers || []).map(server => ({...server, auth: '', clear_auth: false,
+      allowText: server.allow ? JSON.stringify(server.allow, null, 2) : ''}));
     mcpDirty = false;
     renderMcpServers();
     for (const key of ['llm_key', 'tts_key']) {
@@ -1419,7 +1437,10 @@ $('settings-form').addEventListener('submit', async event => {
     if ($('setting-dj-' + key).value) dj[key] = $('setting-dj-' + key).value;
     if ($('setting-dj-clear_' + key).checked) dj['clear_' + key] = true;
   }
-  if (mcpDirty) dj.mcp_servers = mcpChanges();
+  if (mcpDirty) {
+    try { dj.mcp_servers = mcpChanges(); }
+    catch (error) { $('settings-status').textContent = error.message; return; }
+  }
   if (Object.keys(dj).length) changes.dj = dj;
   settingsBusy = true;
   updateDisabled();

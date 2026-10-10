@@ -46,8 +46,14 @@ class NoRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
+USER_AGENT = 'pianobar-super/1.0 (https://github.com/Bake-Ware/pianobar-super)'
+
+
 def open_url(request, timeout, context=None):
     """urlopen without redirects, for requests that carry a secret."""
+    # Some CDNs (Cloudflare in front of Rook) refuse urllib's default User-Agent.
+    if not request.has_header('User-agent'):
+        request.add_header('User-Agent', USER_AGENT)
     handlers = [NoRedirects()] + ([urllib.request.HTTPSHandler(context=context)] if context else [])
     return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
 
@@ -137,7 +143,8 @@ class Configuration:
         result['dj'] = {key: dj[key] for key in self.dj_defaults}
         result['dj'].update(llm_keySet=bool(dj.get('llm_key')), tts_keySet=bool(dj.get('tts_key')), overrides=overrides)
         # MCP server credentials stay on the server, like the provider keys.
-        result['dj']['mcp_servers'] = [dict({k: server.get(k) for k in ('id', 'name', 'url', 'hint', 'enabled')}, authSet=bool(server.get('auth')))
+        result['dj']['mcp_servers'] = [dict({k: server.get(k) for k in ('id', 'name', 'url', 'hint', 'enabled', 'allow')},
+                                            every=server.get('every') or 1, authSet=bool(server.get('auth')))
                                        for server in dj.get('mcp_servers') or [] if isinstance(server, dict)]
         return result
 
@@ -194,6 +201,25 @@ class Configuration:
             raise ValueError(f'Enter the {label} again, or clear it, when moving to a different server.')
         return secret
 
+    @staticmethod
+    def mcp_allow(value):
+        """A tool allowlist, {tool: {argument: [allowed values]}}; None offers every tool."""
+        if value is None:
+            return None
+        invalid = ValueError('Allowed tools must map each tool name to {argument: [allowed values]}, for at most 32 tools.')
+        if not isinstance(value, dict) or not value or len(value) > 32:
+            raise invalid
+        allow = {}
+        for tool, rules in value.items():
+            if not 0 < len(tool) <= 80 or not isinstance(rules, dict) or len(rules) > 8:
+                raise invalid
+            for argument, allowed in rules.items():
+                if not 0 < len(argument) <= 64 or not isinstance(allowed, list) or not 0 < len(allowed) <= 16 or any(
+                        type(option) not in (str, int, float, bool) or isinstance(option, str) and len(option) > 80 for option in allowed):
+                    raise invalid
+            allow[tool] = {argument: list(allowed) for argument, allowed in rules.items()}
+        return allow
+
     @classmethod
     def mcp_servers(cls, value, existing):
         """Validate the DJ's MCP server list; a blank auth keeps the saved one."""
@@ -202,7 +228,7 @@ class Configuration:
         saved = {server.get('id'): server for server in existing if isinstance(server, dict)}
         servers = []
         for item in value:
-            if not isinstance(item, dict) or set(item) - {'id', 'name', 'url', 'hint', 'auth', 'clear_auth', 'enabled'}:
+            if not isinstance(item, dict) or set(item) - {'id', 'name', 'url', 'hint', 'auth', 'clear_auth', 'enabled', 'allow', 'every'}:
                 raise ValueError('Invalid DJ MCP server.')
             if not isinstance(item.get('id', ''), str):
                 raise ValueError('Invalid DJ MCP server.')
@@ -218,9 +244,15 @@ class Configuration:
             url = cls.http_url(item.get('url', ''), 'MCP server URL')
             if not auth and not item.get('clear_auth') and old:
                 auth = cls.kept_secret(old.get('url'), url, old.get('auth', ''), f'auth for {name}')
+            # Left out, the allowlist and frequency stay as saved: a client that doesn't
+            # know them (an older app) must not widen what the DJ may call.
+            allow = cls.mcp_allow(item['allow']) if 'allow' in item else (old or {}).get('allow')
+            every = item['every'] if 'every' in item else (old or {}).get('every', 1)
+            if type(every) is not int or not 1 <= every <= 100:
+                raise ValueError('Offer an MCP server on every 1 to 100 intros.')
             servers.append(dict(id=old['id'] if old else secrets.token_hex(6), name=name, url=url,
                                 hint=' '.join(cls.line(item.get('hint', ''), 'MCP server hint').split()),
-                                auth='' if item.get('clear_auth') else auth, enabled=item.get('enabled', True)))
+                                auth='' if item.get('clear_auth') else auth, enabled=item.get('enabled', True), allow=allow, every=every))
         return servers
 
     def save(self, message):
@@ -680,7 +712,7 @@ class Browsers:
 
 class Metadata:
     """One background worker; public MusicBrainz data and locally cached CAA art."""
-    user_agent = 'pianobar-super/1.0 (https://github.com/Bake-Ware/pianobar-super)'
+    user_agent = USER_AGENT
 
     def __init__(self, session):
         self.session = session
@@ -991,6 +1023,7 @@ class MCPClient:
         self.tools = None
         self.listed = 0
         self.error = ''
+        self.retired = False  # Replaced or removed in Settings: refuse calls from intros already under way.
 
     def rpc(self, method, params=None, timeout=8, notify=False):
         if timeout <= 0:
@@ -1086,11 +1119,11 @@ class MCPClient:
         """The server's tools; every request for them together fits in `timeout`."""
         deadline = time.monotonic() + timeout
         if not self.lock.acquire(timeout=timeout):
-            return self.tools or []  # Still busy with an earlier request.
+            return self.offered()  # Still busy with an earlier request.
         try:
             age = time.monotonic() - self.listed
             if self.tools is not None and age < self.list_ttl or self.tools is None and self.error and age < self.failure_ttl:
-                return self.tools or []
+                return self.offered()
             try:
                 self.connect(deadline)
                 tools, cursor = [], None
@@ -1100,16 +1133,51 @@ class MCPClient:
                     cursor = result.get('nextCursor')
                     if not cursor:
                         break
-                self.tools, self.error = tools[:24], ''
+                self.tools, self.error = tools[:64], ''
             except (MCPError, AttributeError, TypeError) as error:
                 self.tools, self.error = None, str(error)
             self.listed = time.monotonic()
-            return self.tools or []
+            return self.offered()
         finally:
             self.lock.release()
 
+    def offered(self):
+        """The listed tools the DJ may see: all of them, or only the allowlisted ones."""
+        allow, tools = self.server.get('allow'), self.tools or []
+        return (tools if allow is None else [tool for tool in tools if tool['name'] in allow])[:24]
+
+    def permitted(self, name, arguments):
+        """Check a call against the allowlist before it is sent; returns the arguments to send.
+        The model reads untrusted tool output, so this, not the prompt, decides what it may do."""
+        allow = self.server.get('allow')
+        if allow is None:
+            return arguments
+        tool = next((tool for tool in self.tools or [] if tool['name'] == name), None)
+        if name not in allow or tool is None:
+            raise MCPError(f'The tool {name} is not allowed.'[:200])
+        schema = tool.get('inputSchema') if isinstance(tool.get('inputSchema'), dict) else {}
+        properties = schema.get('properties') if isinstance(schema.get('properties'), dict) else {}
+        unknown = sorted(set(arguments) - set(properties))
+        if unknown:
+            raise MCPError(f'{name} does not take {unknown[0]}.'[:200])
+        arguments = dict(arguments)
+        for argument, allowed in allow[name].items():
+            if argument not in arguments:
+                # Send the advertised default explicitly, so the server can't pick another.
+                spec = properties.get(argument)
+                if not isinstance(spec, dict) or 'default' not in spec:
+                    raise MCPError(f'{name} needs {argument}, one of: {", ".join(map(str, allowed))}.'[:200])
+                arguments[argument] = spec['default']
+            value = arguments[argument]
+            if not any(type(value) is type(option) and value == option for option in allowed):
+                raise MCPError(f'{name} is not allowed with {argument}={json.dumps(value)[:40]}; use one of: {", ".join(map(str, allowed))}.'[:300])
+        return arguments
+
     def call(self, name, arguments, timeout=8):
         deadline = time.monotonic() + timeout
+        if self.retired:
+            raise MCPError('This MCP server was changed in Settings.')
+        arguments = self.permitted(name, arguments)
         # Never wait past the DJ's budget behind a slow tools/list.
         if not self.lock.acquire(timeout=timeout):
             raise MCPError('The MCP server is busy.')
@@ -1147,9 +1215,20 @@ class DJTools:
                     continue
                 old = previous.get(server.get('id'))
                 same = old and all(old.server.get(k) == server.get(k) for k in ('url', 'auth'))
-                client = old if same else MCPClient(dict(server))
-                client.server = dict(server)
+                server = dict(server)
+                # A hand-edited config gets the same limits as Settings: a bad frequency means
+                # every intro, a bad allowlist allows nothing.
+                if type(server.get('every')) is not int or not 1 <= server['every'] <= 100:
+                    server['every'] = 1
+                try:
+                    server['allow'] = Configuration.mcp_allow(server.get('allow'))
+                except (ValueError, TypeError):
+                    server['allow'] = {}
+                client = old if same else MCPClient(server)
+                client.server = server
                 self.clients[server.get('id')] = client
+            for client in previous.values():
+                client.retired = all(client is not kept for kept in self.clients.values())
 
     @staticmethod
     def slug(value, limit):
@@ -1166,7 +1245,9 @@ class DJTools:
             runners['weather'] = lambda arguments, timeout: json.dumps(self.dj.weather.current(
                 location['weather_lat'], location['weather_lon'], location['weather_place'], timeout))
         with self.lock:
-            clients = list(self.clients.values())
+            # A server with `every` N is offered on about one intro in N, at random.
+            clients = [client for client in self.clients.values()
+                       if (client.server.get('every') or 1) <= 1 or random.randrange(client.server['every']) == 0]
         listed = {}
         def fetch(client):
             listed[id(client)] = client.list_tools(timeout=max(1, min(6, deadline - time.monotonic())))
@@ -1190,8 +1271,10 @@ class DJTools:
                 serial = 2
                 while name in runners:
                     name, serial = f'{base}_{serial}', serial + 1
+                rules = (server.get('allow') or {}).get(tool['name']) or {}
+                limits = ''.join(f" Allowed {argument}: {', '.join(map(str, allowed))}." for argument, allowed in rules.items())
                 tools.append(dict(type='function', function=dict(name=name, parameters=schema,
-                                  description=f"[{server.get('name')}] " + str(tool.get('description') or tool['name'])[:400])))
+                                  description=f"[{server.get('name')}] " + str(tool.get('description') or tool['name'])[:400] + limits)))
                 runners[name] = lambda arguments, timeout, client=client, tool=tool['name']: client.call(tool, arguments, timeout)
         return tools, runners, hints
 
@@ -1214,7 +1297,10 @@ class DJTools:
             answered = key in listed
             result.append(dict(id=key, name=client.server.get('name'), ok=answered and client.tools is not None,
                                error=client.error if answered else 'The MCP server took too long.',
-                               tools=[tool['name'] for tool in listed.get(key) or []]))
+                               tools=[tool['name'] for tool in listed.get(key) or []],
+                               # Listed but kept from the DJ by the allowlist, to help write it.
+                               hidden=[tool['name'] for tool in client.tools or []
+                                       if answered and client.server.get('allow') is not None and tool['name'] not in client.server['allow']]))
         return dict(servers=result)
 
 
