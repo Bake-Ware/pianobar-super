@@ -51,6 +51,8 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
     /** Bumped when this phone changes [enabled] itself, so an older heartbeat reply can't undo it. */
     @Volatile private var enabledChange = 0
     @Volatile private var parked = false
+    /** park()/resume() calls, so the reader re-primes even when it never saw the parked state. */
+    private val parkings = ParkSerial()
     @Volatile private var output: AudioTrack? = null
     private val playLock = Any()
     @Volatile private var status = StreamStatus.Connecting
@@ -66,7 +68,7 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
 
     /** Silence now and stop the server sending audio; keep the lease and connection. */
     fun park() {
-        synchronized(playLock) { parked = true; output?.pause() }
+        synchronized(playLock) { parked = true; parkings.bump(); output?.pause() }
         // Report Playing again once audio flows after resume().
         if (status == StreamStatus.Playing) set(StreamStatus.Waiting, "")
         enabledChange++
@@ -76,7 +78,7 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
     /** Undo [park]. False if this stream has ended and a new one is needed. */
     fun resume(): Boolean {
         if (cancelled) return false
-        synchronized(playLock) { parked = false }
+        synchronized(playLock) { parked = false; parkings.bump() }
         // Assume the server agrees, so the first (prefilled) audio isn't dropped.
         enabledChange++
         enabled = true
@@ -192,8 +194,11 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
                             val frame = PcmFrame.read(input)
                             retry = 1
                             val muted = held || !enabled || parked
-                            if (muted && !wasMuted) output?.run { pause(); flush(); written = playbackHeadPosition.toLong() and 0xffffffffL; primed = false }
-                            if (muted) { starting = true; startHead = -1; cushion = 0f }
+                            // A quick stop and start can happen between two frames: the track was
+                            // paused, so start over even if this loop never saw it muted.
+                            val reparked = parkings.consume()
+                            if ((muted && !wasMuted) || reparked) output?.run { pause(); flush(); written = playbackHeadPosition.toLong() and 0xffffffffL; primed = false }
+                            if (muted || reparked) { starting = true; startHead = -1; cushion = 0f }
                             wasMuted = muted
                             val track0 = output
                             if (frame.voiceMark && !muted && track0 != null) {
@@ -235,8 +240,11 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
                                 if (primed) { track.pause(); primed = false }
                                 Log.i(TAG, "underrun $underruns after $breaks DJ breaks; refilling a ${cushion}s cushion")
                             }
+                            // Before Android 12 a track starts only once its buffer is full; shrink the
+                            // buffer to the cushion while priming so it starts as soon as that is there.
+                            if (!primed) startAt(track, (cushion * rate).toInt())
                             var offset = 0
-                            while (offset < frame.samples.size && !cancelled && !held && enabled && !parked) {
+                            while (offset < frame.samples.size && !cancelled && !held && enabled && !parked && !parkings.pending()) {
                                 val count2 = track.write(frame.samples, offset, frame.samples.size - offset, AudioTrack.WRITE_NON_BLOCKING)
                                 if (count2 < 0) throw IOException("Audio output unavailable")
                                 offset += count2
@@ -247,6 +255,7 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
                                         // park() pauses under the same lock, so it can't be undone here.
                                         synchronized(playLock) { if (!parked) { track.play(); primed = true } }
                                         if (!primed) break
+                                        startAt(track, -1)
                                         if (starting) { ListenTimer.mark("track playing"); startHead = track.playbackHeadPosition.toLong() and 0xffffffffL }
                                         if (status != StreamStatus.Playing) set(StreamStatus.Playing, "")
                                     }
@@ -284,6 +293,16 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
         const val PREFILL_SECONDS = 2
     }
 
+    /** [frames] of audio start the track once play() is called; -1 restores the whole buffer. */
+    private fun startAt(track: AudioTrack, frames: Int) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return  // setStartThresholdInFrames covers it.
+        val capacity = track.bufferCapacityInFrames
+        track.setBufferSizeInFrames(if (frames < 0) capacity else frames.coerceIn(minimumFrames(track), capacity))
+    }
+
+    private fun minimumFrames(track: AudioTrack) =
+        AudioTrack.getMinBufferSize(track.sampleRate, track.channelConfiguration, AudioFormat.ENCODING_PCM_16BIT) / (track.channelCount * 2)
+
     private fun track(rate: Int, channels: Int): AudioTrack {
         val mask = if (channels == 1) AudioFormat.CHANNEL_OUT_MONO else AudioFormat.CHANNEL_OUT_STEREO
         val minimum = AudioTrack.getMinBufferSize(rate, mask, AudioFormat.ENCODING_PCM_16BIT)
@@ -300,5 +319,24 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
                 // 4.5 s of silence); start as soon as there is anything to play.
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) it.setStartThresholdInFrames(minimum / (channels * 2))
             }
+    }
+}
+
+/** Counts park()/resume() calls; the reader [consume]s them to notice any it missed between frames. */
+class ParkSerial {
+    @Volatile private var serial = 0
+    private var seen = 0
+
+    fun bump() { serial++ }
+
+    /** True while a park or resume is waiting for the reader. */
+    fun pending() = serial != seen
+
+    /** True (once) if park() or resume() ran since the last call. */
+    fun consume(): Boolean {
+        val current = serial
+        val changed = current != seen
+        seen = current
+        return changed
     }
 }

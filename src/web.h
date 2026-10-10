@@ -7,6 +7,7 @@ void BarWebState (const BarApp_t *);
 void BarWebHandled (void);
 void BarWebPrompt (bool active, bool secret, bool line, size_t limit, const char *mask);
 void BarWebDeleteConfirmation (const char *stationName);
+void BarWebPromptKind (const char *kind);
 
 bool BarWebOpen (void);
 

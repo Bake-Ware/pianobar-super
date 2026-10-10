@@ -40,6 +40,18 @@ import zlib
 from urllib.parse import quote, urlsplit, urlencode
 
 
+class NoRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects, so an Authorization header never follows one to another host."""
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def open_url(request, timeout, context=None):
+    """urlopen without redirects, for requests that carry a secret."""
+    handlers = [NoRedirects()] + ([urllib.request.HTTPSHandler(context=context)] if context else [])
+    return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
+
+
 class Configuration:
     """Edit only supported keys; keep hand-written config and secrets private."""
     native_defaults = {'user': '', 'cache_songs': True, 'offline': False,
@@ -167,6 +179,21 @@ class Configuration:
             raise ValueError(f'{label} must be an HTTP or HTTPS URL without embedded credentials.') from None
         return value
 
+    @staticmethod
+    def origin(url):
+        parts = urlsplit(url or '')
+        with contextlib.suppress(ValueError):
+            return (parts.scheme, parts.hostname, parts.port)
+        return (parts.scheme, parts.netloc, None)
+
+    @classmethod
+    def kept_secret(cls, old_url, new_url, secret, label):
+        """A saved secret stays only with the host it was given for: pointing the URL
+        elsewhere and pressing Check would otherwise hand it to that host."""
+        if secret and cls.origin(old_url) != cls.origin(new_url):
+            raise ValueError(f'Enter the {label} again, or clear it, when moving to a different server.')
+        return secret
+
     @classmethod
     def mcp_servers(cls, value, existing):
         """Validate the DJ's MCP server list; a blank auth keeps the saved one."""
@@ -177,6 +204,8 @@ class Configuration:
         for item in value:
             if not isinstance(item, dict) or set(item) - {'id', 'name', 'url', 'hint', 'auth', 'clear_auth', 'enabled'}:
                 raise ValueError('Invalid DJ MCP server.')
+            if not isinstance(item.get('id', ''), str):
+                raise ValueError('Invalid DJ MCP server.')
             old = saved.get(item['id']) if 'id' in item else None
             if 'id' in item and old is None:
                 raise ValueError('That DJ MCP server no longer exists. Reload Settings.')
@@ -186,11 +215,12 @@ class Configuration:
             if any(type(item.get(key, False)) is not bool for key in ('clear_auth', 'enabled')):
                 raise ValueError('MCP server options must be on or off.')
             auth = cls.line(item.get('auth', ''), 'MCP server auth')
-            servers.append(dict(id=old['id'] if old else secrets.token_hex(6), name=name,
-                                url=cls.http_url(item.get('url', ''), 'MCP server URL'),
+            url = cls.http_url(item.get('url', ''), 'MCP server URL')
+            if not auth and not item.get('clear_auth') and old:
+                auth = cls.kept_secret(old.get('url'), url, old.get('auth', ''), f'auth for {name}')
+            servers.append(dict(id=old['id'] if old else secrets.token_hex(6), name=name, url=url,
                                 hint=' '.join(cls.line(item.get('hint', ''), 'MCP server hint').split()),
-                                auth='' if item.get('clear_auth') else auth or (old or {}).get('auth', ''),
-                                enabled=item.get('enabled', True)))
+                                auth='' if item.get('clear_auth') else auth, enabled=item.get('enabled', True)))
         return servers
 
     def save(self, message):
@@ -248,6 +278,7 @@ class Configuration:
                 if key != 'password' or value:
                     web[key] = value
             dj = self.dj()
+            saved_urls = {key: dj.get(key) for key in ('llm_url', 'tts_url')}
             dj_changes = changes.get('dj', {})
             if not isinstance(dj_changes, dict) or set(dj_changes) - (set(self.dj_defaults) | {'llm_key', 'tts_key', 'clear_llm_key', 'clear_tts_key', 'mcp_servers'}):
                 raise ValueError('Unsupported DJ settings.')
@@ -291,6 +322,9 @@ class Configuration:
             for key in ('llm_key', 'tts_key'):
                 if dj_changes.get('clear_' + key):
                     dj[key] = ''
+                elif not dj_changes.get(key):
+                    url = key.replace('_key', '_url')
+                    self.kept_secret(saved_urls[url], dj.get(url), dj.get(key), 'LLM key' if key == 'llm_key' else 'voice key')
             path = self.directory / 'config'
             try:
                 lines = path.read_text().splitlines(keepends=True)
@@ -859,7 +893,8 @@ class DJMemory:
         with contextlib.suppress(OSError, ValueError, TypeError, AttributeError):
             stored = json.loads(self.path().read_text())
             self.intros = [item for item in stored.get('intros', []) if isinstance(item, dict) and isinstance(item.get('text'), str)][-self.intro_limit:]
-            self.activity = [item for item in stored.get('activity', []) if isinstance(item, dict) and isinstance(item.get('kind'), str)][-self.activity_limit:]
+            self.activity = [item for item in stored.get('activity', []) if isinstance(item, dict) and isinstance(item.get('kind'), str)
+                             and type(item.get('at')) in (int, float)][-self.activity_limit:]
 
     def path(self):
         return self.configuration.directory / 'dj_context.json'
@@ -958,6 +993,9 @@ class MCPClient:
         self.error = ''
 
     def rpc(self, method, params=None, timeout=8, notify=False):
+        if timeout <= 0:
+            raise MCPError('The MCP server took too long.')
+        deadline = time.monotonic() + timeout
         message = dict(jsonrpc='2.0', method=method)
         if params is not None:
             message['params'] = params
@@ -975,17 +1013,14 @@ class MCPClient:
             headers['MCP-Protocol-Version'] = self.version
         request = urllib.request.Request(self.server['url'], json.dumps(message).encode(), headers, method='POST')
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with open_url(request, timeout) as response:
                 self.session_id = response.headers.get('Mcp-Session-Id') or self.session_id
                 if notify:
                     return None
                 if response.headers.get_content_type() == 'text/event-stream':
-                    reply = self.event_reply(response, message['id'])
+                    reply = self.event_reply(response, message['id'], deadline)
                 else:
-                    body = response.read(1024 * 1024 + 1)
-                    if len(body) > 1024 * 1024:
-                        raise MCPError('The MCP server reply was too large.')
-                    reply = json.loads(body)
+                    reply = json.loads(self.read_body(response, deadline))
         except urllib.error.HTTPError as error:
             if error.code == 404 and self.session_id:
                 self.session_id = self.version = None  # The server forgot us; start over next time.
@@ -995,17 +1030,35 @@ class MCPClient:
         if not isinstance(reply, dict):
             raise MCPError('The MCP server sent an invalid reply.')
         if reply.get('error'):
-            raise MCPError(str((reply['error'] or {}).get('message') or 'The MCP server reported an error.')[:300])
+            error = reply['error']
+            # JSON-RPC says an object with a message, but don't count on it.
+            message = error.get('message') if isinstance(error, dict) else error
+            raise MCPError(str(message or 'The MCP server reported an error.')[:300])
         return reply.get('result')
 
     @staticmethod
-    def event_reply(response, serial):
+    def read_body(response, deadline):
+        """At most 1 MB, and no longer than the deadline even if the server trickles it."""
+        chunks, total = [], 0
+        while chunk := response.read1(65536):
+            total += len(chunk)
+            if total > 1024 * 1024:
+                raise MCPError('The MCP server reply was too large.')
+            if time.monotonic() > deadline:
+                raise MCPError('The MCP server took too long.')
+            chunks.append(chunk)
+        return b''.join(chunks)
+
+    @staticmethod
+    def event_reply(response, serial, deadline):
         """Read server-sent events until the reply to our request arrives."""
         data, total = [], 0
         for raw in response:
             total += len(raw)
             if total > 1024 * 1024:
                 raise MCPError('The MCP server reply was too large.')
+            if time.monotonic() > deadline:
+                raise MCPError('The MCP server took too long.')
             line = raw.decode('utf-8', 'replace').rstrip('\r\n')
             if line.startswith('data:'):
                 data.append(line[5:].removeprefix(' '))
@@ -1021,24 +1074,28 @@ class MCPClient:
                 return event
         raise MCPError('The MCP server closed the stream without replying.')
 
-    def connect(self, timeout):
+    def connect(self, deadline):
         if self.version:
             return
         result = self.rpc('initialize', dict(protocolVersion=self.protocol, capabilities={},
-                                             clientInfo=dict(name='pianobar-dj', version='1')), timeout)
-        self.version = str((result or {}).get('protocolVersion') or self.protocol)[:32]
-        self.rpc('notifications/initialized', notify=True, timeout=timeout)
+                                             clientInfo=dict(name='pianobar-dj', version='1')), deadline - time.monotonic())
+        self.version = str((result if isinstance(result, dict) else {}).get('protocolVersion') or self.protocol)[:32]
+        self.rpc('notifications/initialized', notify=True, timeout=deadline - time.monotonic())
 
     def list_tools(self, timeout=6):
-        with self.lock:
+        """The server's tools; every request for them together fits in `timeout`."""
+        deadline = time.monotonic() + timeout
+        if not self.lock.acquire(timeout=timeout):
+            return self.tools or []  # Still busy with an earlier request.
+        try:
             age = time.monotonic() - self.listed
             if self.tools is not None and age < self.list_ttl or self.tools is None and self.error and age < self.failure_ttl:
                 return self.tools or []
             try:
-                self.connect(timeout)
+                self.connect(deadline)
                 tools, cursor = [], None
                 for _ in range(3):
-                    result = self.rpc('tools/list', {'cursor': cursor} if cursor else {}, timeout) or {}
+                    result = self.rpc('tools/list', {'cursor': cursor} if cursor else {}, deadline - time.monotonic()) or {}
                     tools += [tool for tool in result.get('tools') or [] if isinstance(tool, dict) and isinstance(tool.get('name'), str)]
                     cursor = result.get('nextCursor')
                     if not cursor:
@@ -1048,18 +1105,29 @@ class MCPClient:
                 self.tools, self.error = None, str(error)
             self.listed = time.monotonic()
             return self.tools or []
+        finally:
+            self.lock.release()
 
     def call(self, name, arguments, timeout=8):
-        with self.lock:
+        deadline = time.monotonic() + timeout
+        # Never wait past the DJ's budget behind a slow tools/list.
+        if not self.lock.acquire(timeout=timeout):
+            raise MCPError('The MCP server is busy.')
+        try:
             for attempt in range(2):
                 try:
-                    self.connect(timeout)
-                    result = self.rpc('tools/call', dict(name=name, arguments=arguments), timeout) or {}
+                    self.connect(deadline)
+                    result = self.rpc('tools/call', dict(name=name, arguments=arguments), deadline - time.monotonic()) or {}
                     break
                 except MCPError:
                     if attempt or self.version:
                         raise  # Retry only after the server dropped our session.
-        parts = [item.get('text', '') for item in result.get('content') or [] if isinstance(item, dict) and item.get('type') == 'text']
+        finally:
+            self.lock.release()
+        content = result.get('content') or [] if isinstance(result, dict) else None
+        if not isinstance(content, list):
+            raise MCPError('The MCP server sent an invalid tool result.')
+        parts = [str(item.get('text', '')) for item in content if isinstance(item, dict) and item.get('type') == 'text']
         text = '\n'.join(parts) or json.dumps(result.get('structuredContent') or {})
         return ('Tool error: ' if result.get('isError') else '') + text[:4000]
 
@@ -1090,10 +1158,13 @@ class DJTools:
     def catalog(self, deadline):
         """LLM tool definitions, a name → runner map, and the listener's per-server hints."""
         location = dict(self.dj.location)
-        tools = [dict(type='function', function=dict(name='weather', parameters=dict(type='object', properties={}),
-                      description=f"Current weather and today's forecast for the listener's area ({location['weather_place'] or 'home'}).") )]
-        runners = {'weather': lambda arguments, timeout: json.dumps(self.dj.weather.current(
-            location['weather_lat'], location['weather_lon'], location['weather_place'], timeout))}
+        tools, runners = [], {}
+        # Network lookups off (metadata_network) means no weather lookups either.
+        if self.dj.session.metadata.network:
+            tools.append(dict(type='function', function=dict(name='weather', parameters=dict(type='object', properties={}),
+                              description=f"Current weather and today's forecast for the listener's area ({location['weather_place'] or 'home'}).")))
+            runners['weather'] = lambda arguments, timeout: json.dumps(self.dj.weather.current(
+                location['weather_lat'], location['weather_lon'], location['weather_place'], timeout))
         with self.lock:
             clients = list(self.clients.values())
         listed = {}
@@ -1124,15 +1195,26 @@ class DJTools:
                 runners[name] = lambda arguments, timeout, client=client, tool=tool['name']: client.call(tool, arguments, timeout)
         return tools, runners, hints
 
-    def status(self):
-        """For Settings: whether each server answers, and which tools it offers."""
+    def status(self, timeout=8):
+        """For Settings: whether each server answers, and which tools it offers. Servers are
+        asked at once, so a few slow ones can't hold the page for minutes."""
         with self.lock:
             clients = list(self.clients.items())
+        listed = {}
+        def fetch(key, client):
+            listed[key] = client.list_tools(timeout=timeout - 1)
+        threads = [threading.Thread(target=fetch, args=item, daemon=True) for item in clients]
+        deadline = time.monotonic() + timeout
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(max(0, deadline - time.monotonic()))
         result = []
         for key, client in clients:
-            tools = client.list_tools()
-            result.append(dict(id=key, name=client.server.get('name'), ok=client.tools is not None,
-                               error=client.error, tools=[tool['name'] for tool in tools]))
+            answered = key in listed
+            result.append(dict(id=key, name=client.server.get('name'), ok=answered and client.tools is not None,
+                               error=client.error if answered else 'The MCP server took too long.',
+                               tools=[tool['name'] for tool in listed.get(key) or []]))
         return dict(servers=result)
 
 
@@ -1348,7 +1430,7 @@ class DJ:
             headers['Authorization'] = 'Bearer ' + key
         request = urllib.request.Request(url, json.dumps(message).encode(), headers, method='POST')
         try:
-            with urllib.request.urlopen(request, timeout=timeout, context=ssl.create_default_context(cafile=ca_file) if ca_file else None) as response:
+            with open_url(request, timeout, ssl.create_default_context(cafile=ca_file) if ca_file else None) as response:
                 content_type = response.headers.get_content_type()
                 limit = 8 * 1024 * 1024 if audio else 128 * 1024
                 body = response.read(limit + 1)
@@ -1415,9 +1497,8 @@ class DJ:
             calls.append((call, function['name'], arguments if isinstance(arguments, dict) else None))
         return calls
 
-    def agentic(self, messages):
+    def agentic(self, messages, deadline):
         """Let the model pull context through tools, within a few rounds and a time budget."""
-        deadline = time.monotonic() + self.tool_budget
         tools, runners, hints = self.tools.catalog(deadline)
         if hints:
             messages[0]['content'] += (' Listener notes on tool sources (from Settings): ' +
@@ -1429,14 +1510,17 @@ class DJ:
             calls = self.tool_calls(reply)
             if final or not calls:
                 return reply.get('content')
-            messages.append({'role': 'assistant', 'content': reply.get('content') or '', 'tool_calls': reply['tool_calls']})
-            for call, name, arguments in calls[:4]:
+            calls = calls[:4]
+            # Send back only the calls answered below: an unanswered tool_call_id makes
+            # OpenAI-compatible servers reject the whole history.
+            messages.append({'role': 'assistant', 'content': reply.get('content') or '', 'tool_calls': [call for call, _, _ in calls]})
+            for call, name, arguments in calls:
                 runner = runners.get(name)
                 try:
                     if runner is None or arguments is None:
                         raise ValueError('Unknown tool or invalid arguments.')
                     result = runner(arguments, max(1, min(8, deadline - time.monotonic())))
-                except (DJUnavailable, MCPError, ValueError, OSError, TypeError) as error:
+                except (DJUnavailable, MCPError, ValueError, OSError, TypeError, AttributeError) as error:
                     result = 'Tool error: ' + str(error)[:300]
                 answer = {'role': 'tool', 'name': name, 'content': json.dumps({'untrusted_data': result})}
                 if call.get('id'):
@@ -1510,16 +1594,19 @@ class DJ:
             data = json.dumps(dict(context, **names, genres=metadata.get('genres', []), genreScope=metadata.get('genreScope'),
                                    releaseDate=metadata.get('releaseDate'), **situation))
             messages = [{'role': 'system', 'content': prompt}, {'role': 'user', 'content': data}]
+            deadline = time.monotonic() + self.tool_budget
             try:
-                content = self.agentic([dict(item) for item in messages])
+                content = self.agentic([dict(item) for item in messages], deadline)
                 text = self.text(self.sounds(content, self.sounds_ready()))
             except DJNotListening:
                 raise
-            except (DJUnavailable, ValueError, TypeError) as error:
-                # Tools unsupported, slow or confusing the model: fall back to a plain intro.
+            except (DJUnavailable, ValueError, TypeError, AttributeError) as error:
+                # Tools unsupported, slow or confusing the model: fall back to a plain intro,
+                # within what is left of the same budget (plus the time a reply needs).
                 self.require_listening()
                 try:
-                    text = self.text(self.sounds(self.complete(messages).get('content'), self.sounds_ready()))
+                    text = self.text(self.sounds(self.complete(messages, timeout=max(5, min(30, deadline - time.monotonic() + 15))).get('content'),
+                                                 self.sounds_ready()))
                 except (ValueError, TypeError) as error:
                     raise DJUnavailable('The LLM did not return a short text introduction.') from error
             result = dict(text=text, songKey=key[0])
@@ -2276,8 +2363,7 @@ class DJ:
                 headers['Authorization'] = 'Bearer ' + self.tts_key
             try:
                 request = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(request, timeout=5,
-                        context=ssl.create_default_context(cafile=self.tts_ca) if self.tts_ca else None) as response:
+                with open_url(request, 5, ssl.create_default_context(cafile=self.tts_ca) if self.tts_ca else None) as response:
                     body = response.read(128 * 1024 + 1)
                 if len(body) > 128 * 1024:
                     raise ValueError('Voice catalog is too large.')
@@ -2448,6 +2534,8 @@ class Session:
                 with self.audio_lock:
                     for listener in self.audio_marked:
                         if self.clients.allowed(self.audio_listeners.get(listener)):
+                            # A full queue drops the mark: that listener just skips one buffer
+                            # rebuild before the line, which is harmless.
                             with contextlib.suppress(queue.Full):
                                 listener.put_nowait((0, packet))
                 continue
@@ -2802,8 +2890,9 @@ class Session:
                 if len(data) > self.prompt["limit"]:
                     raise ValueError("The answer is too long.")
                 data += b"\n" if self.prompt["line"] or not data else b""
-                # Free-text answers are searches and names; never log a password or a menu pick.
-                if not self.prompt.get('secret') and not mask and len(text.strip()) > 1:
+                # Only searches and station names are remembered (and shown to the LLM); never the
+                # login email, a password or a menu pick. The player labels those prompts.
+                if self.prompt.get('kind') in ('search', 'station_name') and not self.prompt.get('secret') and len(text.strip()) > 1:
                     activity = ('request', dict(self.state), dict(text=text))
                 self.prompt["active"] = False
             else:
@@ -3136,9 +3225,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         packets = [listener.get(timeout=.1 if prefill and not was_allowed else 1)]
                     except queue.Empty:
                         packets = []
-                    if not packets and time.monotonic() - wrote >= 1:
-                        packets = [(0, bytes(20))]  # Keepalive while paused or between tracks.
                     allowed = session.clients.allowed(client_id)
+                    # Keepalive while paused or between tracks; a disabled listener (a phone keeping
+                    # its stream warm) needs them less often, so its radio can rest.
+                    if not packets and time.monotonic() - wrote >= (1 if allowed else 5):
+                        packets = [(0, bytes(20))]
                     # Just enabled, or audio was skipped while briefly disabled: catch up from the
                     # recent audio. Everything queued is also there; repeats are skipped by sequence.
                     if allowed and prefill:
@@ -3283,6 +3374,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     dj_changes = message.get('settings', {}).get('dj', {})
                     if 'voice' in dj_changes:
                         session.dj.voice = saved['dj']['voice']
+                    if 'metadata_network' in dj_changes and 'PIANOBAR_METADATA_NETWORK' not in os.environ:
+                        session.metadata.network = saved['dj']['metadata_network']
                     with session.dj.station_lock:
                         if 'style' in dj_changes and 'PIANOBAR_DJ_STYLE' not in os.environ:
                             session.dj.style = saved['dj']['style']

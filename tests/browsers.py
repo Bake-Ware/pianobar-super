@@ -161,6 +161,16 @@ try:
                 seen.append('mark')
         assert seen == expected, (seen, expected)
         response.close()
+    # A disabled listener (a phone keeping its stream warm) gets a keepalive every 5 s, not every second.
+    idle = request('/api/clients/register', {'name': 'Warm phone'})['id']
+    connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=8)
+    connection.request('GET', '/api/audio', headers={'Authorization': 'Basic test', 'X-Pianobar-Client': idle})
+    response = connection.getresponse()
+    assert response.read(20) == bytes(20)
+    started = time.monotonic()
+    assert response.read(20) == bytes(20)
+    assert 4.5 < time.monotonic() - started < 6.5, time.monotonic() - started
+    connection.close()
     request('/api/clients/unregister', {'id': a})
     assert not registry.allowed(a)
     with patch.object(module['time'], 'monotonic', return_value=time.monotonic() + registry.lease + 1):

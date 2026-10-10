@@ -75,6 +75,47 @@ class FakeMCP:
         return [method for method, *_ in self.calls]
 
 
+class StubMCP:
+    """An HTTP server whose every POST is answered by `answer(handler, message)`; records each request."""
+    def __init__(self, answer):
+        self.requests = []
+        requests = self.requests
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                message = json.loads(self.rfile.read(int(self.headers['Content-Length'])) or b'null')
+                requests.append((self.path, message, self.headers.get('Authorization')))
+                answer(self, message)
+            def log_message(self, *args):
+                pass
+        self.server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.server.daemon_threads = True
+        self.server.handle_error = lambda *args: None
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.url = f'http://127.0.0.1:{self.server.server_port}/mcp'
+
+    def close(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+
+def send_json(handler, value, status=200):
+    body = json.dumps(value).encode()
+    handler.send_response(status)
+    handler.send_header('Content-Type', 'application/json')
+    handler.send_header('Content-Length', str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def rpc_answer(message, result):
+    """A JSON-RPC reply: the handshake succeeds; tools/call gets `result` (a dict of top-level fields)."""
+    if 'id' not in message:
+        return None
+    if message['method'] == 'initialize':
+        return {'jsonrpc': '2.0', 'id': message['id'], 'result': {'protocolVersion': '2025-06-18'}}
+    return dict({'jsonrpc': '2.0', 'id': message['id']}, **result)
+
+
 class DJTests(unittest.TestCase):
     def setUp(self):
         # The DJ's memory and settings live in a scratch config folder.
@@ -825,13 +866,17 @@ class DJTests(unittest.TestCase):
             for action in ('act_songlove', 'act_songpause', 'act_songnext'):
                 self.request('/api/command', {'action': action})
                 self.session.pending = False
-            # A station search is remembered; a password or a menu pick never is.
-            for number, (text, mask, secret) in enumerate([('Talking Heads', '', False), ('hunter2', '', True), ('12', '0123456789', False)]):
+            # A station search is remembered; the login email, a password or a menu pick never is.
+            for number, (text, mask, secret, kind) in enumerate([('Talking Heads', '', False, 'search'), ('hunter2', '', True, None),
+                                                                 ('12', '0123456789', False, None), ('bake@example.com', '', False, None)]):
                 self.session.prompt = dict(active=True, id=number, mask=mask, secret=secret, line=True, limit=100)
+                if kind:
+                    self.session.prompt['kind'] = kind
                 self.request('/api/command', {'text': text, 'promptId': number})
         path = self.config_dir / 'dj_context.json'
         self.assertEqual(os.stat(path).st_mode & 0o777, 0o600)
         self.assertNotIn('hunter2', path.read_text())
+        self.assertNotIn('bake@example.com', path.read_text())
         # A fresh session, as after a restart, picks up where the last one left off.
         restarted = host['Session']()
         memory = restarted.dj.memory.snapshot()
@@ -1038,6 +1083,150 @@ class DJTests(unittest.TestCase):
         self.server.authorization = b'Basic private'
         self.request('/mcp', dict(jsonrpc='2.0', id=1, method='ping'), expected=401)
         self.assertEqual(self.request('/mcp', dict(jsonrpc='2.0', id=1, method='ping'), headers={'Authorization': 'Basic private'})['result'], {})
+
+    def stub(self, answer):
+        server = StubMCP(answer)
+        self.addCleanup(server.close)
+        return server
+
+    def test_malformed_mcp_replies_become_tool_errors(self):
+        for result in ({'result': 'ok'}, {'error': 'boom'}, {'result': ['not', 'a', 'dict']}, {'result': {'content': 7}}):
+            def answer(handler, message, result=result):
+                reply = rpc_answer(message, result)
+                if reply is None:
+                    handler.send_response(202); handler.end_headers()
+                else:
+                    send_json(handler, reply)
+            server = self.stub(answer)
+            client = host['MCPClient'](dict(url=server.url))
+            with self.assertRaises(host['MCPError']):
+                client.call('anything', {}, timeout=3)
+        # In an intro, a broken tool is just a tool error; the intro still airs.
+        server = self.stub(lambda handler, message: send_json(handler, rpc_answer(message, {'result': 'ok'})) if 'id' in message
+                           else (handler.send_response(202), handler.end_headers()))
+        dj = self.session.dj
+        dj.tools.configure([dict(id='x', name='Broken', url=server.url, enabled=True)])
+        dj.tools.clients['x'].tools, dj.tools.clients['x'].listed = [{'name': 'lookup'}], time.monotonic()
+        self.script += [{'message': {'content': '', 'tool_calls': [{'id': 'b', 'function': {'name': 'Broken__lookup', 'arguments': '{}'}}]}},
+                        {'message': {'content': 'Broken tools, fine music. Kid Cudi.'}}]
+        self.assertEqual(dj.generate({}, cache=False)['text'], 'Broken tools, fine music. Kid Cudi.')
+        answer = next(m for m in self.chats()[-1]['messages'] if m['role'] == 'tool')
+        self.assertIn('Tool error', json.loads(answer['content'])['untrusted_data'])
+
+    def test_credentials_never_follow_a_redirect(self):
+        thief = self.stub(lambda handler, message: send_json(handler, {}))
+        def redirect(handler, message):
+            handler.send_response(307)
+            handler.send_header('Location', thief.url)
+            handler.send_header('Content-Length', '0')
+            handler.end_headers()
+        bouncer = self.stub(redirect)
+        client = host['MCPClient'](dict(url=bouncer.url, auth='SECRET'))
+        self.assertEqual(client.list_tools(timeout=3), [])
+        self.assertIn('HTTP 307', client.error)
+        with self.assertRaises(host['DJUnavailable']):
+            self.session.dj.post(bouncer.url, {}, 'llm-SECRET', timeout=3)
+        self.assertEqual(len(bouncer.requests), 2)
+        self.assertEqual(thief.requests, [])
+
+    def test_moving_an_endpoint_needs_its_secret_again(self):
+        self.server.configuration = configuration = host['Configuration']()
+        save = lambda dj, expected=200: self.request('/api/settings', {'settings': {'dj': dj}}, expected=expected)
+        save({'mcp_servers': [{'name': 'Rook', 'url': 'https://rook.example/mcp', 'auth': 'rook-secret'}]})
+        rook = self.request('/api/settings')['dj']['mcp_servers'][0]
+        # Same host, new path: the auth stays.
+        save({'mcp_servers': [dict(id=rook['id'], name='Rook', url='https://rook.example/v2/mcp')]})
+        self.assertEqual(configuration.dj()['mcp_servers'][0]['auth'], 'rook-secret')
+        # Another host (or scheme, or port) without the auth is refused, and nothing changes.
+        for url in ('https://attacker.example/mcp', 'http://rook.example/v2/mcp', 'https://rook.example:8443/v2/mcp'):
+            save({'mcp_servers': [dict(id=rook['id'], name='Rook', url=url)]}, expected=400)
+        self.assertEqual(configuration.dj()['mcp_servers'][0]['url'], 'https://rook.example/v2/mcp')
+        save({'mcp_servers': [dict(id=rook['id'], name='Rook', url='https://elsewhere.example/mcp', auth='new-secret')]})
+        save({'mcp_servers': [dict(id=rook['id'], name='Rook', url='https://third.example/mcp', clear_auth=True)]})
+        self.assertEqual(configuration.dj()['mcp_servers'][0]['auth'], '')
+        # The same goes for the LLM and voice keys.
+        save({'llm_url': 'https://llm.example/v1/chat', 'llm_key': 'llm-secret', 'tts_url': 'https://tts.example/speech', 'tts_key': 'tts-secret'})
+        save({'llm_url': 'https://llm.example/v2/chat', 'model': 'other'})
+        save({'llm_url': 'https://attacker.example/chat'}, expected=400)
+        save({'tts_url': 'https://attacker.example/speech'}, expected=400)
+        save({'llm_url': 'https://attacker.example/chat', 'clear_llm_key': True})
+        stored = configuration.dj()
+        self.assertEqual((stored['llm_url'], stored['llm_key'], stored['tts_key']), ('https://attacker.example/chat', '', 'tts-secret'))
+        # A server id must be a string.
+        save({'mcp_servers': [dict(id=['x'], name='Rook', url='https://rook.example/mcp')]}, expected=400)
+
+    def test_tool_history_only_lists_answered_calls(self):
+        dj = self.session.dj
+        dj.weather.url = self.provider_url + '/forecast'
+        calls = [{'id': f'w{n}', 'type': 'function', 'function': {'name': 'weather', 'arguments': '{}'}} for n in range(6)]
+        calls.insert(1, {'id': 'bad', 'type': 'function', 'function': 'not an object'})
+        self.script += [{'choices': [{'message': {'content': None, 'tool_calls': calls}}]},
+                        {'choices': [{'message': {'content': 'Sunny. Kid Cudi.'}}]}]
+        self.assertEqual(dj.generate({}, cache=False)['text'], 'Sunny. Kid Cudi.')
+        messages = self.chats()[1]['messages']
+        listed = [call['id'] for message in messages if message['role'] == 'assistant' for call in message['tool_calls']]
+        answered = [message['tool_call_id'] for message in messages if message['role'] == 'tool']
+        self.assertEqual(listed, ['w0', 'w1', 'w2', 'w3'])
+        self.assertEqual(answered, listed)
+
+    def test_mcp_time_budget_holds_end_to_end(self):
+        # A server that trickles its event stream can't hold a call past its timeout.
+        def trickle(handler, message):
+            reply = rpc_answer(message, {'result': {'content': []}})
+            if reply is None or message['method'] == 'initialize':
+                return send_json(handler, reply or {}, 200 if reply else 202)
+            handler.send_response(200)
+            handler.send_header('Content-Type', 'text/event-stream')
+            handler.end_headers()
+            with contextlib.suppress(OSError):
+                for _ in range(40):
+                    handler.wfile.write(b': still here\n\n')
+                    handler.wfile.flush()
+                    time.sleep(.2)
+        client = host['MCPClient'](dict(url=self.stub(trickle).url))
+        started = time.monotonic()
+        with self.assertRaises(host['MCPError']):
+            client.call('slow', {}, timeout=1.5)
+        self.assertLess(time.monotonic() - started, 3)
+        # A call waits for a busy client only as long as its own timeout.
+        client.lock.acquire()
+        started = time.monotonic()
+        with self.assertRaises(host['MCPError']):
+            client.call('slow', {}, timeout=.5)
+        self.assertLess(time.monotonic() - started, 1.5)
+        client.lock.release()
+        # Settings asks every server at once and gives up on the slow ones.
+        def slow(handler, message):
+            time.sleep(3)
+            with contextlib.suppress(OSError):
+                send_json(handler, {})
+        tools = self.session.dj.tools
+        tools.configure([dict(id=f's{n}', name=f'Slow {n}', url=self.stub(slow).url, enabled=True) for n in range(4)])
+        started = time.monotonic()
+        status = tools.status(timeout=2)
+        self.assertLess(time.monotonic() - started, 3.5)
+        self.assertEqual([server['ok'] for server in status['servers']], [False] * 4)
+
+    def test_weather_follows_the_network_lookups_setting(self):
+        dj = self.session.dj
+        names = lambda: [tool['function']['name'] for tool in dj.tools.catalog(time.monotonic() + 1)[0]]
+        self.assertEqual(names(), ['weather'])
+        self.server.configuration = host['Configuration']()
+        with patch.dict(os.environ):
+            os.environ.pop('PIANOBAR_METADATA_NETWORK', None)
+            self.request('/api/settings', {'settings': {'dj': {'metadata_network': False}}})
+            self.assertEqual(names(), [])
+            self.request('/api/settings', {'settings': {'dj': {'metadata_network': True}}})
+        self.assertEqual(names(), ['weather'])
+        # The default location stays the station's home town.
+        self.assertEqual(host['Configuration'].dj_defaults['weather_place'], 'San Antonio, TX')
+
+    def test_hand_edited_memory_without_times_is_ignored(self):
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        (self.config_dir / 'dj_context.json').write_text(json.dumps(dict(intros=[], activity=[
+            dict(kind='skip', at='x'), dict(kind='love', at=True), dict(kind='request', text='Talking Heads', at=int(time.time()))])))
+        memory = host['DJMemory']()
+        self.assertEqual([item['kind'] for item in memory.snapshot()['listenerActivity']], ['request'])
 
     def raw(self, path, message):
         request = urllib.request.Request(self.url + path, json.dumps(message).encode(), {'Content-Type': 'application/json'})

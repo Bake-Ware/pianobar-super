@@ -89,6 +89,13 @@ int main (void) {
 	json_object *generic = receive (pair[1]);
 	assert (json_object_object_get (generic, "kind") == NULL);
 	json_object_put (generic);
+	/* Searches are labelled so the web host may remember them; nothing else is. */
+	BarWebPromptKind ("search");
+	BarWebPrompt (true, false, true, 10, NULL);
+	json_object *search = receive (pair[1]);
+	assert (strcmp (json_object_get_string (json_object_object_get (search, "kind")), "search") == 0);
+	json_object_put (search);
+	BarWebPromptKind (NULL);
 	selectStation (&app, pair[1], "missing");
 	assert (app.nextStation == &first && !app.player.doQuit);
 	app.offline = true;

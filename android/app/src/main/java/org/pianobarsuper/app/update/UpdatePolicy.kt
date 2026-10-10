@@ -26,6 +26,17 @@ object UpdatePolicy {
         apk.packageName == packageName && apk.versionCode > installedCode &&
             HEX64.matches(apk.sha256) && apk.size in 1..MAX_SIZE
 
+    /**
+     * An install nobody asked for waits until it can't interrupt anyone: nothing plays on this
+     * phone and no pianobar screen is showing (a root install closes the app, and anything else
+     * may pop up a confirmation), and it is tried once per build.
+     */
+    fun mayInstallUnattended(playing: Boolean, appVisible: Boolean, alreadyTried: Boolean): Boolean =
+        !playing && !appVisible && !alreadyTried
+
+    /** Updates can be large: an unattended download waits for Wi-Fi or another unmetered network. */
+    fun mayDownloadUnattended(metered: Boolean): Boolean = !metered
+
     /** Only an APK signed by exactly the certificates of the installed app may replace it. */
     fun sameSigners(installed: Collection<String>, candidate: Collection<String>): Boolean =
         installed.isNotEmpty() && installed.toSet() == candidate.toSet()

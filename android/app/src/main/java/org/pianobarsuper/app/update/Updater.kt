@@ -10,6 +10,7 @@ import android.content.Intent
 import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
+import android.net.ConnectivityManager
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
@@ -70,7 +71,8 @@ sealed interface UpdateStatus {
  * installed app's signing certificates, and installed: silently as root where
  * possible (Bakecar), otherwise through PackageInstaller, unattended when
  * Android allows a self-update and with a confirmation prompt when it doesn't.
- * The install waits while this phone is playing unless the user taps Install.
+ * Unless the user taps Install, the install waits until nothing plays on this
+ * phone and the app is in the background, and downloads wait for Wi-Fi.
  */
 object Updater {
     private const val TAG = "pianobar-update"
@@ -90,17 +92,24 @@ object Updater {
         this.app = app
         val manager = app.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(NotificationChannel(CHANNEL, "App updates", NotificationManager.IMPORTANCE_DEFAULT))
-        WorkManager.getInstance(app).enqueueUniquePeriodicWork("update-check", ExistingPeriodicWorkPolicy.KEEP,
+        WorkManager.getInstance(app).enqueueUniquePeriodicWork("update-check", ExistingPeriodicWorkPolicy.UPDATE,
             PeriodicWorkRequestBuilder<UpdateWorker>(6, TimeUnit.HOURS)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
                 .build())
-        // A deferred update goes in as soon as nothing plays on this phone.
+        // A deferred update goes in as soon as nothing plays on this phone and the app is in the background.
         app.repo.scope.launch {
-            Playback.state.collect { if (!playing() && _status.value is UpdateStatus.Ready) install(userAsked = false) }
+            Playback.state.collect { if (_status.value is UpdateStatus.Ready) install(userAsked = false) }
+        }
+        app.repo.scope.launch {
+            ProcessLifecycleOwner.get().lifecycle.currentStateFlow.collect { if (_status.value is UpdateStatus.Ready) install(userAsked = false) }
         }
     }
 
     private fun playing() = Playback.state.value.let { it.listening || it.localPlaying }
+
+    private fun appVisible() = ProcessLifecycleOwner.get().lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+
+    private fun metered() = app.getSystemService(ConnectivityManager::class.java)?.isActiveNetworkMetered ?: true
 
     /** Installs from settings need either root or the "install unknown apps" permission. */
     fun needsInstallPermission(context: Context): Boolean =
@@ -121,6 +130,7 @@ object Updater {
     /** Ask the server, download a newer build, then install it now or once nothing plays. */
     suspend fun check(userAsked: Boolean) {
         val apk = (if (lock.tryLock()) try { fetch(userAsked) } finally { lock.unlock() } else null) ?: return
+        // While the app is on screen, install() waits for it to go to the background.
         if (userAsked || !playing()) install(userAsked) else notifyReady(apk)
     }
 
@@ -149,6 +159,11 @@ object Updater {
             return null
         }
         val file = ready?.takeIf { it.first == apk && it.second.isFile }?.second ?: try {
+            if (!userAsked && !UpdatePolicy.mayDownloadUnattended(metered())) {
+                Log.i(TAG, "update ${apk.versionName} waits for an unmetered network")
+                _status.value = UpdateStatus.Idle
+                return null
+            }
             download(api, apk)
         } catch (e: CancellationException) {
             throw e
@@ -241,7 +256,7 @@ object Updater {
         lock.withLock {
             val (apk, file) = ready ?: return
             if (_status.value !is UpdateStatus.Ready) return
-            if (!userAsked && (playing() || autoTried == apk.versionCode)) return
+            if (!userAsked && !UpdatePolicy.mayInstallUnattended(playing(), appVisible(), autoTried == apk.versionCode)) return
             if (!userAsked) autoTried = apk.versionCode
             _status.value = UpdateStatus.Installing(apk)
             cancelNotification()
@@ -313,7 +328,7 @@ object Updater {
     private fun notifyReady(apk: ServerApk) {
         val install = PendingIntent.getActivity(app, 2, Intent(app, MainActivity::class.java).setAction(ACTION_INSTALL),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        notify("pianobar ${apk.versionName} is ready", "It installs when you stop listening, or tap to install now.", install)
+        notify("pianobar ${apk.versionName} is ready", "It installs when you stop listening and leave the app, or tap to install now.", install)
     }
 
     private fun notifyFailed(message: String) {

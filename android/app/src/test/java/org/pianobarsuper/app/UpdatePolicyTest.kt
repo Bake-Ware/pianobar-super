@@ -57,4 +57,17 @@ class UpdatePolicyTest {
         assertFalse(UpdatePolicy.rootInstallSucceeded("rsu: lock timeout"))
         assertFalse(UpdatePolicy.rootInstallSucceeded(""))
     }
+
+    @Test fun unattendedInstallsWaitUntilNobodyIsUsingTheApp() {
+        assertTrue(UpdatePolicy.mayInstallUnattended(playing = false, appVisible = false, alreadyTried = false))
+        // Launching the app must not close it under the user a few seconds later.
+        assertFalse(UpdatePolicy.mayInstallUnattended(playing = false, appVisible = true, alreadyTried = false))
+        assertFalse(UpdatePolicy.mayInstallUnattended(playing = true, appVisible = false, alreadyTried = false))
+        assertFalse(UpdatePolicy.mayInstallUnattended(playing = false, appVisible = false, alreadyTried = true))
+    }
+
+    @Test fun unattendedDownloadsWaitForAnUnmeteredNetwork() {
+        assertTrue(UpdatePolicy.mayDownloadUnattended(metered = false))
+        assertFalse(UpdatePolicy.mayDownloadUnattended(metered = true))
+    }
 }
