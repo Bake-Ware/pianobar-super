@@ -1023,6 +1023,7 @@ class MCPClient:
         self.tools = None
         self.listed = 0
         self.error = ''
+        self.retired = False  # Replaced or removed in Settings: refuse calls from intros already under way.
 
     def rpc(self, method, params=None, timeout=8, notify=False):
         if timeout <= 0:
@@ -1174,6 +1175,8 @@ class MCPClient:
 
     def call(self, name, arguments, timeout=8):
         deadline = time.monotonic() + timeout
+        if self.retired:
+            raise MCPError('This MCP server was changed in Settings.')
         arguments = self.permitted(name, arguments)
         # Never wait past the DJ's budget behind a slow tools/list.
         if not self.lock.acquire(timeout=timeout):
@@ -1212,9 +1215,20 @@ class DJTools:
                     continue
                 old = previous.get(server.get('id'))
                 same = old and all(old.server.get(k) == server.get(k) for k in ('url', 'auth'))
-                client = old if same else MCPClient(dict(server))
-                client.server = dict(server)
+                server = dict(server)
+                # A hand-edited config gets the same limits as Settings: a bad frequency means
+                # every intro, a bad allowlist allows nothing.
+                if type(server.get('every')) is not int or not 1 <= server['every'] <= 100:
+                    server['every'] = 1
+                try:
+                    server['allow'] = Configuration.mcp_allow(server.get('allow'))
+                except (ValueError, TypeError):
+                    server['allow'] = {}
+                client = old if same else MCPClient(server)
+                client.server = server
                 self.clients[server.get('id')] = client
+            for client in previous.values():
+                client.retired = all(client is not kept for kept in self.clients.values())
 
     @staticmethod
     def slug(value, limit):
@@ -1285,7 +1299,8 @@ class DJTools:
                                error=client.error if answered else 'The MCP server took too long.',
                                tools=[tool['name'] for tool in listed.get(key) or []],
                                # Listed but kept from the DJ by the allowlist, to help write it.
-                               hidden=[tool['name'] for tool in client.tools or [] if answered and tool not in listed[key]]))
+                               hidden=[tool['name'] for tool in client.tools or []
+                                       if answered and client.server.get('allow') is not None and tool['name'] not in client.server['allow']]))
         return dict(servers=result)
 
 

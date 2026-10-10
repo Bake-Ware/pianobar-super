@@ -1290,7 +1290,27 @@ class DJTests(unittest.TestCase):
         rook = self.request('/api/settings')['dj']['mcp_servers'][0]
         self.request('/api/settings', {'settings': {'dj': {'mcp_servers': [dict(id=rook['id'], name='Rook', url=server.url, allow=None)]}}})
         self.assertIsNone(configuration.dj()['mcp_servers'][0]['allow'])
-        self.assertEqual(len(dj.tools.catalog(time.monotonic() + 5)[0]), 6)
+        tools, runners, _ = dj.tools.catalog(time.monotonic() + 5)
+        self.assertEqual(len(tools), 6)
+        # Without an allowlist nothing is reported hidden.
+        self.assertEqual(self.request('/api/dj/tools')['servers'][0]['hidden'], [])
+        # An intro under way can't keep using a server that Settings replaced or removed.
+        before = len(server.calls())
+        self.request('/api/settings', {'settings': {'dj': {'mcp_servers': [dict(id=rook['id'], name='Rook', url=server.url, auth='rotated')]}}})
+        with self.assertRaises(host['MCPError']):
+            runners['Rook__rook_call']({'cap': 'shell.exec'}, 3)
+        runners = dj.tools.catalog(time.monotonic() + 5)[1]
+        self.request('/api/settings', {'settings': {'dj': {'mcp_servers': []}}})
+        with self.assertRaises(host['MCPError']):
+            runners['Rook__rook_presence']({}, 3)
+        self.assertEqual(len(server.calls()), before)
+        # A hand-edited config can't break intros: a bad frequency means every intro, a bad allowlist allows nothing.
+        dj.tools.configure([dict(id='h', name='Rook', url=server.url, enabled=True, every='4', allow='rook_call rook_task')])
+        self.assertEqual([tool['function']['name'] for tool in dj.tools.catalog(time.monotonic() + 5)[0]], ['weather'])
+        self.assertEqual((dj.tools.clients['h'].server['every'], dj.tools.clients['h'].server['allow']), (1, {}))
+        with self.assertRaises(host['MCPError']):
+            dj.tools.clients['h'].call('rook_task', {}, timeout=3)
+        self.assertEqual(len(server.calls()), before)
 
     def test_provider_requests_send_a_pianobar_user_agent(self):
         agents = []
