@@ -1221,6 +1221,155 @@ class DJTests(unittest.TestCase):
         # The default location stays the station's home town.
         self.assertEqual(host['Configuration'].dj_defaults['weather_place'], 'San Antonio, TX')
 
+    def rook_like(self):
+        """A Rook-shaped MCP server: read-only and dangerous tools side by side. Records every request."""
+        listed = [{'name': 'rook_task', 'inputSchema': {'type': 'object', 'properties': {
+                      'action': {'type': 'string', 'default': 'deck'}, 'id': {'type': 'string'}, 'data': {'type': 'object'}}}},
+                  {'name': 'rook_call', 'inputSchema': {'type': 'object', 'properties': {
+                      'worker': {'type': 'string'}, 'cap': {'type': 'string'}, 'args': {'type': 'object'}}}},
+                  {'name': 'rook_chat_read', 'inputSchema': {'type': 'object', 'properties': {'room': {'type': 'string'}}}},
+                  {'name': 'rook_presence', 'inputSchema': {'type': 'object', 'properties': {}}},
+                  {'name': 'rook_secret', 'inputSchema': {'type': 'object', 'properties': {'name': {'type': 'string'}}}}]
+        agents = []
+        def answer(handler, message):
+            agents.append(handler.headers.get('User-Agent'))
+            if 'id' not in message:
+                handler.send_response(202); handler.end_headers(); return
+            if message['method'] == 'tools/list':
+                return send_json(handler, rpc_answer(message, {'result': {'tools': listed}}))
+            text = json.dumps(message.get('params'))
+            send_json(handler, rpc_answer(message, {'result': {'content': [{'type': 'text', 'text': text}]}}))
+        server = self.stub(answer)
+        server.agents = agents
+        server.calls = lambda: [message['params'] for _, message, _ in server.requests if message.get('method') == 'tools/call']
+        return server
+
+    def test_mcp_allowlist_limits_offered_tools_and_refuses_other_calls(self):
+        server = self.rook_like()
+        self.server.configuration = configuration = host['Configuration']()
+        allow = {'rook_task': {'action': ['deck', 'search', 'get', 'list']}, 'rook_chat_read': {'room': ['general']}, 'rook_presence': {}}
+        self.request('/api/settings', {'settings': {'dj': {'mcp_servers': [{'name': 'Rook', 'url': server.url, 'allow': allow}]}}})
+        dj = self.session.dj
+        tools = {tool['function']['name']: tool['function'] for tool in dj.tools.catalog(time.monotonic() + 5)[0]}
+        # Only allowlisted tools reach the model, and it is told the allowed values.
+        self.assertEqual(list(tools), ['weather', 'Rook__rook_task', 'Rook__rook_chat_read', 'Rook__rook_presence'])
+        self.assertIn('Allowed action: deck, search, get, list.', tools['Rook__rook_task']['description'])
+        status = self.request('/api/dj/tools')['servers'][0]
+        self.assertEqual((status['tools'], status['hidden']), (['rook_task', 'rook_chat_read', 'rook_presence'], ['rook_call', 'rook_secret']))
+        client = next(iter(dj.tools.clients.values()))
+        # Disallowed tools, disallowed actions, undeclared arguments and look-alike values never leave.
+        for name, arguments in [('rook_call', {'worker': 'cachyrig', 'cap': 'shell.exec'}), ('rook_secret', {'name': 'x'}),
+                                ('rook_task', {'action': 'update'}), ('rook_task', {'action': 'batch', 'data': {}}),
+                                ('rook_task', {'action': 'deck', 'Action': 'update'}), ('rook_task', {'action': ['deck']}),
+                                ('rook_chat_read', {}), ('rook_chat_read', {'room': 'ops'}), ('rook_presence', {'worker': 'x'}),
+                                ('no_such_tool', {})]:
+            with self.subTest(name=name, arguments=arguments), self.assertRaises(host['MCPError']):
+                client.call(name, arguments, timeout=3)
+        self.assertEqual(server.calls(), [])
+        # Allowed calls go through; a missing constrained argument is sent as its schema default.
+        client.call('rook_task', {}, timeout=3)
+        client.call('rook_task', {'action': 'search', 'data': {'query': 'pianobar'}}, timeout=3)
+        client.call('rook_chat_read', {'room': 'general'}, timeout=3)
+        client.call('rook_presence', {}, timeout=3)
+        self.assertEqual(server.calls(), [{'name': 'rook_task', 'arguments': {'action': 'deck'}},
+                                          {'name': 'rook_task', 'arguments': {'action': 'search', 'data': {'query': 'pianobar'}}},
+                                          {'name': 'rook_chat_read', 'arguments': {'room': 'general'}},
+                                          {'name': 'rook_presence', 'arguments': {}}])
+        # In an intro, a refused call is a tool error for the model, and a hidden tool doesn't exist.
+        calls = [{'id': 'a', 'function': {'name': 'Rook__rook_task', 'arguments': '{"action": "update", "id": "t1"}'}},
+                 {'id': 'b', 'function': {'name': 'Rook__rook_call', 'arguments': '{"cap": "shell.exec"}'}}]
+        self.script += [{'message': {'content': '', 'tool_calls': calls}}, {'message': {'content': 'All quiet in Rook. Kid Cudi.'}}]
+        self.assertEqual(dj.generate({}, cache=False)['text'], 'All quiet in Rook. Kid Cudi.')
+        answers = {m['tool_call_id']: json.loads(m['content'])['untrusted_data'] for m in self.chats()[-1]['messages'] if m['role'] == 'tool'}
+        self.assertIn('not allowed with action="update"', answers['a'])
+        self.assertIn('Unknown tool', answers['b'])
+        self.assertEqual(len(server.calls()), 4)
+        # Every request names pianobar-super: Cloudflare refuses urllib's default User-Agent.
+        self.assertTrue(server.agents and all(agent.startswith('pianobar-super/') for agent in server.agents), server.agents)
+        # Clearing the allowlist offers every tool again.
+        rook = self.request('/api/settings')['dj']['mcp_servers'][0]
+        self.request('/api/settings', {'settings': {'dj': {'mcp_servers': [dict(id=rook['id'], name='Rook', url=server.url, allow=None)]}}})
+        self.assertIsNone(configuration.dj()['mcp_servers'][0]['allow'])
+        tools, runners, _ = dj.tools.catalog(time.monotonic() + 5)
+        self.assertEqual(len(tools), 6)
+        # Without an allowlist nothing is reported hidden.
+        self.assertEqual(self.request('/api/dj/tools')['servers'][0]['hidden'], [])
+        # An intro under way can't keep using a server that Settings replaced or removed.
+        before = len(server.calls())
+        self.request('/api/settings', {'settings': {'dj': {'mcp_servers': [dict(id=rook['id'], name='Rook', url=server.url, auth='rotated')]}}})
+        with self.assertRaises(host['MCPError']):
+            runners['Rook__rook_call']({'cap': 'shell.exec'}, 3)
+        runners = dj.tools.catalog(time.monotonic() + 5)[1]
+        self.request('/api/settings', {'settings': {'dj': {'mcp_servers': []}}})
+        with self.assertRaises(host['MCPError']):
+            runners['Rook__rook_presence']({}, 3)
+        self.assertEqual(len(server.calls()), before)
+        # A hand-edited config can't break intros: a bad frequency means every intro, a bad allowlist allows nothing.
+        dj.tools.configure([dict(id='h', name='Rook', url=server.url, enabled=True, every='4', allow='rook_call rook_task')])
+        self.assertEqual([tool['function']['name'] for tool in dj.tools.catalog(time.monotonic() + 5)[0]], ['weather'])
+        self.assertEqual((dj.tools.clients['h'].server['every'], dj.tools.clients['h'].server['allow']), (1, {}))
+        with self.assertRaises(host['MCPError']):
+            dj.tools.clients['h'].call('rook_task', {}, timeout=3)
+        self.assertEqual(len(server.calls()), before)
+
+    def test_provider_requests_send_a_pianobar_user_agent(self):
+        agents = []
+        def answer(handler, message):
+            agents.append(handler.headers.get('User-Agent'))
+            send_json(handler, {'choices': [{'message': {'content': 'hi'}}]})
+        self.session.dj.post(self.stub(answer).url, {}, 'key', timeout=3)
+        self.assertTrue(agents[0].startswith('pianobar-super/'))
+        self.assertNotIn('Python-urllib', agents[0])
+
+    def test_mcp_every_offers_a_server_on_about_one_intro_in_n(self):
+        server = self.rook_like()
+        dj = self.session.dj
+        dj.tools.configure([dict(id='r', name='Rook', url=server.url, enabled=True, every=4, hint='Mention Rook now and then.')])
+        catalog = lambda: dj.tools.catalog(time.monotonic() + 5)
+        with patch.object(host['random'], 'randrange', return_value=1) as draw:
+            tools, runners, hints = catalog()
+            self.assertEqual(([tool['function']['name'] for tool in tools], hints), (['weather'], []))
+            draw.assert_called_once_with(4)
+        with patch.object(host['random'], 'randrange', return_value=0):
+            tools, runners, hints = catalog()
+            self.assertEqual(len(tools), 6)
+            self.assertEqual(hints, [dict(server='Rook', hint='Mention Rook now and then.')])
+        # Random, not periodic: roughly a quarter of intros over many draws.
+        offered = sum(len(catalog()[0]) > 1 for _ in range(400))
+        self.assertTrue(50 < offered < 150, offered)
+        # every=1 (and older saved servers without it) are always offered, without a draw.
+        dj.tools.configure([dict(id='r', name='Rook', url=server.url, enabled=True)])
+        with patch.object(host['random'], 'randrange') as draw:
+            self.assertEqual(len(catalog()[0]), 6)
+            draw.assert_not_called()
+
+    def test_mcp_allowlist_and_every_are_validated_and_round_trip(self):
+        self.server.configuration = configuration = host['Configuration']()
+        save = lambda servers, expected=200: self.request('/api/settings', {'settings': {'dj': {'mcp_servers': servers}}}, expected=expected)
+        allow = {'rook_task': {'action': ['deck', 'search']}, 'rook_presence': {}}
+        save([{'name': 'Rook', 'url': 'https://rook.example/mcp', 'auth': 'rook-secret', 'allow': allow, 'every': 4},
+              {'name': 'Home', 'url': 'http://10.0.0.5:9000/mcp'}])
+        rook, home = self.request('/api/settings')['dj']['mcp_servers']
+        self.assertEqual((rook['allow'], rook['every'], home['allow'], home['every']), (allow, 4, None, 1))
+        # An edit that leaves them out (an older app) keeps them; the auth stays private.
+        save([dict(id=rook['id'], name='Rook', url=rook['url'], hint='new'), dict(id=home['id'], name='Home', url=home['url'])])
+        stored = configuration.dj()['mcp_servers']
+        self.assertEqual((stored[0]['allow'], stored[0]['every'], stored[0]['auth'], stored[0]['hint']), (allow, 4, 'rook-secret', 'new'))
+        self.assertEqual(self.session.dj.tools.clients[rook['id']].server['allow'], allow)
+        self.assertNotIn('rook-secret', json.dumps(self.request('/api/settings')))
+        # A server saved before these fields existed reads as unrestricted, every intro.
+        legacy = dict(stored[1]); legacy.pop('allow'); legacy.pop('every')
+        self.assertEqual(host['Configuration'].mcp_servers([dict(id=home['id'], name='Home', url=home['url'])], [legacy])[0]['every'], 1)
+        for bad in ({'allow': {}}, {'allow': []}, {'allow': 'rook_task'}, {'allow': {'rook_task': ['action']}},
+                    {'allow': {'rook_task': {'action': 'deck'}}}, {'allow': {'rook_task': {'action': []}}},
+                    {'allow': {'rook_task': {'action': [None]}}}, {'allow': {'rook_task': {'action': [{'x': 1}]}}},
+                    {'allow': {'rook_task': {'action': ['x' * 81]}}}, {'allow': {'': {}}}, {'allow': {f't{n}': {} for n in range(33)}},
+                    {'allow': {'t': {f'a{n}': ['x'] for n in range(9)}}}, {'allow': {'t': {'a': ['x'] * 17}}},
+                    {'every': 0}, {'every': 101}, {'every': 2.5}, {'every': True}, {'every': '4'}):
+            with self.subTest(bad=bad):
+                save([dict({'id': rook['id'], 'name': 'Rook', 'url': rook['url']}, **bad)], expected=400)
+        self.assertEqual(configuration.dj()['mcp_servers'][0]['allow'], allow)
+
     def test_hand_edited_memory_without_times_is_ignored(self):
         self.config_dir.mkdir(parents=True, exist_ok=True)
         (self.config_dir / 'dj_context.json').write_text(json.dumps(dict(intros=[], activity=[
