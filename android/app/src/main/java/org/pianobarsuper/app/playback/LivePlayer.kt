@@ -44,7 +44,7 @@ class LivePlayer(looper: Looper, private val controls: Controls) : SimpleBasePla
         ).build()
         val builder = State.Builder()
             .setAvailableCommands(commands)
-            .setPlayWhenReady(state?.paused != true, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
+            .setPlayWhenReady(listening, PLAY_WHEN_READY_CHANGE_REASON_USER_REQUEST)
         val hasSong = state != null && state.title.isNotEmpty()
         // Media3 allows an empty playlist only while idle.
         builder.setPlaybackState(when {
@@ -76,9 +76,7 @@ class LivePlayer(looper: Looper, private val controls: Controls) : SimpleBasePla
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
-        if (playWhenReady && !listening) controls.startListening()
-        val paused = snapshot?.state?.paused == true
-        if (playWhenReady == paused) controls.serverPlay(playWhenReady)
+        if (playWhenReady) controls.startListening() else controls.stopListening()
         return Futures.immediateVoidFuture()
     }
 
