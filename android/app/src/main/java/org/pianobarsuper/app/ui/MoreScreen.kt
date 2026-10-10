@@ -126,6 +126,8 @@ fun MoreScreen(open: (String) -> Unit, onThemeChange: (String) -> Unit) {
                 Switch(autoListen, { autoListen = it; repo.store.autoListen = it })
             }
         }
+        Spacer(Modifier.padding(top = 12.dp))
+        UpdatesSection()
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
         ListItem(
             headlineContent = { Text("Change server or sign out") },

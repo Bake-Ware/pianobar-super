@@ -38,6 +38,7 @@ import kotlinx.coroutines.withContext
 import org.pianobarsuper.app.PianobarApp
 import org.pianobarsuper.app.R
 import org.pianobarsuper.app.ui.MainActivity
+import org.pianobarsuper.app.widget.WidgetListenActivity
 
 /** What this phone is playing: the server's live stream, downloaded songs, or nothing. */
 data class PhonePlayback(
@@ -248,6 +249,8 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        // The widget's listen button closes its own short-lived task; that isn't the user leaving.
+        if (rootIntent?.component?.className == WidgetListenActivity::class.java.name) return
         val player = session.player
         if (!player.playWhenReady || player.mediaItemCount == 0 || player.playbackState == Player.STATE_IDLE) stopSelf()
     }

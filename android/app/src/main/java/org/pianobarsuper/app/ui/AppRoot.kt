@@ -131,6 +131,7 @@ fun AppRoot(onThemeChange: (String) -> Unit) {
         }
     }
     PromptDialog()
+    UpdatePermissionGuide()
 }
 
 @Composable

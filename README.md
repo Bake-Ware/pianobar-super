@@ -295,6 +295,9 @@ your installed browser; see the Android README for proxy login limitations.
 For offline device playback, download songs from the web Library, then use
 **Downloads → Add downloaded tracks** in the APK to import them. These local copies
 play without the server, including with the screen off.
+To serve your own build, copy it to `web/pianobar.apk` next to the web files. The
+app checks `GET /api/android/version` (`versionCode`, `versionName`, `sha256`, read
+from the APK itself) and updates itself from `/pianobar.apk`.
 See [Android setup, builds, and package migration](android/README.md).
 
 ## Terminal and development

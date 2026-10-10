@@ -7,6 +7,8 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import org.pianobarsuper.app.data.PhoneLibrary
 import org.pianobarsuper.app.data.Repository
+import org.pianobarsuper.app.update.Updater
+import org.pianobarsuper.app.widget.NowPlayingWidgets
 
 class PianobarApp : Application() {
     lateinit var repo: Repository
@@ -24,5 +26,7 @@ class PianobarApp : Application() {
             override fun onStart(owner: LifecycleOwner) = repo.retain()
             override fun onStop(owner: LifecycleOwner) = repo.release()
         })
+        Updater.init(this)
+        NowPlayingWidgets.init(this)
     }
 }

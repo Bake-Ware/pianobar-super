@@ -34,6 +34,7 @@ import tty
 import tempfile
 import time
 import webbrowser
+import zipfile
 import zlib
 from urllib.parse import quote, urlsplit, urlencode
 
@@ -2792,6 +2793,91 @@ class Session:
                 self.audio.close()
 
 
+def android_manifest(data):
+    """package, versionCode and versionName from a compiled (binary XML) AndroidManifest.xml."""
+    def u16(at): return struct.unpack_from('<H', data, at)[0]
+    def u32(at): return struct.unpack_from('<I', data, at)[0]
+    if len(data) < 8 or u16(0) != 0x0003:
+        raise ValueError('Not a binary XML manifest')
+    strings, resources, at = [], [], u16(2)
+    while at + 8 <= len(data):
+        kind, header, size = u16(at), u16(at + 2), u32(at + 4)
+        if size < 8 or at + size > len(data):
+            raise ValueError('Truncated manifest')
+        if kind == 0x0001:  # String pool
+            count, flags, start = u32(at + 8), u32(at + 16), u32(at + 20)
+            for index in range(count):
+                offset = at + start + u32(at + header + 4 * index)
+                if flags & 0x100:
+                    offset += 2 if data[offset] & 0x80 else 1  # UTF-16 length, unused
+                    length = data[offset]; offset += 1
+                    if length & 0x80:
+                        length = (length & 0x7f) << 8 | data[offset]; offset += 1
+                    strings.append(data[offset:offset + length].decode('utf-8', 'replace'))
+                else:
+                    length = u16(offset); offset += 2
+                    if length & 0x8000:
+                        length = (length & 0x7fff) << 16 | u16(offset); offset += 2
+                    strings.append(data[offset:offset + 2 * length].decode('utf-16-le', 'replace'))
+        elif kind == 0x0180:  # Resource ids of the attribute names
+            resources = [u32(at + 8 + 4 * i) for i in range((size - 8) // 4)]
+        elif kind == 0x0102:  # Start element
+            ext = at + header
+            name = u32(ext + 4)
+            if name < len(strings) and strings[name] == 'manifest':
+                first, step, count = u16(ext + 8), u16(ext + 10), u16(ext + 12)
+                found = {}
+                for index in range(count):
+                    attr = ext + first + index * step
+                    key, raw, kind_value, value = u32(attr + 4), u32(attr + 8), data[attr + 15], u32(attr + 16)
+                    rid = resources[key] if key < len(resources) else 0
+                    label = {0x0101021b: 'versionCode', 0x0101021c: 'versionName'}.get(rid) or (strings[key] if key < len(strings) else '')
+                    if kind_value == 0x03 or raw != 0xffffffff:
+                        found[label] = strings[value if kind_value == 0x03 else raw]
+                    else:
+                        found[label] = value
+                code = found.get('versionCode')
+                if not isinstance(code, int):
+                    code = int(str(code)) if str(code or '').isdigit() else None
+                if code is None:
+                    raise ValueError('The manifest has no versionCode')
+                return {'package': str(found.get('package', '')), 'versionCode': code,
+                        'versionName': str(found.get('versionName', ''))}
+        at += size
+    raise ValueError('The manifest has no <manifest> element')
+
+
+_android_apk_cache = {}
+_android_apk_lock = threading.Lock()
+
+
+def android_apk_info(path):
+    """The published APK's identity, re-read only when the file changes; None when there is none."""
+    try:
+        info = path.stat() if path.is_file() and not path.is_symlink() else None
+    except OSError:
+        info = None
+    if info is None or info.st_size > 200 * 1024 * 1024:
+        return None
+    key = (str(path), info.st_mtime_ns, info.st_size)
+    with _android_apk_lock:
+        if key in _android_apk_cache:
+            return _android_apk_cache[key]
+        digest = hashlib.sha256()
+        try:
+            with path.open('rb') as apk:
+                for block in iter(lambda: apk.read(1 << 20), b''):
+                    digest.update(block)
+            with zipfile.ZipFile(path) as archive:
+                manifest = android_manifest(archive.read('AndroidManifest.xml'))
+        except (OSError, ValueError, KeyError, IndexError, struct.error, zipfile.BadZipFile):
+            manifest = {'package': '', 'versionCode': None, 'versionName': ''}
+        result = dict(manifest, sha256=digest.hexdigest(), size=info.st_size, updated=int(info.st_mtime))
+        _android_apk_cache.clear()
+        _android_apk_cache[key] = result
+        return result
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -2945,14 +3031,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(200, data, 'application/vnd.android.package-archive',
                        headers={'Content-Disposition': 'attachment; filename="pianobar.apk"'})
             return
+        if parsed.path == '/api/android/version':
+            # What the app's updater compares with its own build before downloading /pianobar.apk.
+            apk = android_apk_info(self.server.assets / 'pianobar.apk')
+            if apk is None or apk['versionCode'] is None:
+                self.reply(404, b'{"error":"No Android app is installed on this server."}')
+                return
+            self.reply(200, json.dumps(dict(apk, url='/pianobar.apk')).encode())
+            return
         if parsed.path == '/api/settings':
             try:
-                apk = self.server.assets / 'pianobar.apk'
-                info = None
-                with contextlib.suppress(OSError):
-                    info = apk.stat() if apk.is_file() and not apk.is_symlink() else None
+                apk = android_apk_info(self.server.assets / 'pianobar.apk')
                 settings = self.server.configuration.public()
-                settings['androidApp'] = {'size': info.st_size, 'updated': int(info.st_mtime)} if info else None
+                settings['androidApp'] = {k: apk[k] for k in ('size', 'updated', 'versionCode', 'versionName')} if apk else None
                 self.reply(200, json.dumps(settings).encode())
             except (OSError, ValueError):
                 self.reply(500, b'{"error":"Could not read settings."}')
