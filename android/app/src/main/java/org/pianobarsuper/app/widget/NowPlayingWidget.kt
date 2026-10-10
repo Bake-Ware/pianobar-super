@@ -16,6 +16,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Shader
 import android.content.res.Configuration
+import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.View
@@ -183,6 +184,10 @@ object NowPlayingWidgets {
             views.setTextViewTextSize(R.id.widget_artist, TypedValue.COMPLEX_UNIT_SP, 14 * scale)
             views.setTextViewTextSize(R.id.widget_station, TypedValue.COMPLEX_UNIT_SP, 12 * scale)
             views.setTextViewTextSize(R.id.widget_status, TypedValue.COMPLEX_UNIT_SP, 12 * scale)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                views.setViewLayoutWidth(R.id.widget_icon, 18 * scale, TypedValue.COMPLEX_UNIT_DIP)
+                views.setViewLayoutHeight(R.id.widget_icon, 18 * scale, TypedValue.COMPLEX_UNIT_DIP)
+            }
         }
         // Square art as tall as the widget, but never crowding out the text and buttons.
         val density = context.resources.displayMetrics.density
@@ -201,8 +206,9 @@ object NowPlayingWidgets {
         views.setInt(R.id.widget_next, "setImageAlpha", if (content.canNext) 255 else 90)
 
         val immutable = PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        views.setOnClickPendingIntent(R.id.widget_root,
-            PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), immutable))
+        val open = PendingIntent.getActivity(context, 0, Intent(context, MainActivity::class.java), immutable)
+        views.setOnClickPendingIntent(R.id.widget_root, open)
+        views.setOnClickPendingIntent(R.id.widget_icon, open)
         views.setOnClickPendingIntent(R.id.widget_listen, PendingIntent.getActivity(context, 1,
             Intent(context, WidgetListenActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION), immutable))
         views.setOnClickPendingIntent(R.id.widget_love, PendingIntent.getBroadcast(context, 2,

@@ -76,12 +76,12 @@ class LivePlayer(looper: Looper, private val controls: Controls) : SimpleBasePla
     }
 
     override fun handleSetPlayWhenReady(playWhenReady: Boolean): ListenableFuture<*> {
-        if (playWhenReady) controls.startListening() else controls.stopListening()
+        if (playWhenReady) { ListenTimer.begin("media session"); controls.startListening() } else controls.stopListening()
         return Futures.immediateVoidFuture()
     }
 
     override fun handlePrepare(): ListenableFuture<*> {
-        if (!listening) controls.startListening()
+        if (!listening) { ListenTimer.begin("media prepare"); controls.startListening() }
         return Futures.immediateVoidFuture()
     }
 

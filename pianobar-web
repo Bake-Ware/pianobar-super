@@ -8,6 +8,7 @@ import random
 import secrets
 import struct
 import codecs
+import collections
 import contextlib
 import gzip
 import hashlib
@@ -2390,6 +2391,12 @@ class Session:
         self.download_slots = threading.BoundedSemaphore(2)
         self.audio_lock = threading.Lock()
         self.audio_listeners = {}
+        # The last few seconds of the current epoch, as (sequence, received, seconds, packet),
+        # so a listener that asks can start with a full jitter buffer.
+        self.audio_recent = collections.deque()
+        self.audio_recent_total = 0.0
+        self.audio_sequence = 0
+        self.audio_skipped = set()  # Listeners that missed audio while disabled.
         self.clients = Browsers()
         self.initial_output = 'host'
         self.setup_required = False
@@ -2434,13 +2441,37 @@ class Session:
             if size != len(packet) - 20 or not 8000 <= rate <= 192000 or not 1 <= channels <= 8:
                 continue
             with self.audio_lock:
+                self.audio_sequence += 1
+                recent = self.audio_recent
+                if recent and struct.unpack('!I', recent[-1][3][16:20])[0] != epoch:
+                    recent.clear()  # The song was cut short: never replay it.
+                    self.audio_recent_total = 0.0
+                length = size / (rate * channels * 2)
+                recent.append((self.audio_sequence, time.monotonic(), length, packet))
+                self.audio_recent_total += length
+                while self.audio_recent_total - recent[0][2] >= self.audio_recent_seconds:
+                    self.audio_recent_total -= recent.popleft()[2]
                 for listener, client_id in self.audio_listeners.items():
                     if not self.clients.allowed(client_id):
+                        self.audio_skipped.add(listener)
                         continue
                     if listener.full():
                         with contextlib.suppress(queue.Empty):
                             listener.get_nowait()
-                    listener.put_nowait(packet)
+                    listener.put_nowait((self.audio_sequence, packet))
+
+    audio_recent_seconds = 3
+
+    def recent_audio(self, seconds):
+        """Up to `seconds` of the newest audio, if it is still live (not from before a pause)."""
+        now, total, packets = time.monotonic(), 0, []
+        with self.audio_lock:
+            for sequence, received, length, packet in reversed(self.audio_recent):
+                if total + length > seconds or now - received > seconds + 1:
+                    break
+                total += length
+                packets.append((sequence, packet))
+        return packets[::-1]
 
     def read_output(self):
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
@@ -3057,6 +3088,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             try:
                 with session.clients.lock:
                     session.clients.get(client_id)
+                # Optional: start (and restart after being re-enabled) with this many
+                # seconds of recent audio, so the player can begin at once.
+                prefill = float(self.headers.get('X-Pianobar-Prefill', 0))
+                if not 0 <= prefill <= 10:
+                    raise ValueError('X-Pianobar-Prefill must be 0–10 seconds.')
+                prefill = min(prefill, session.audio_recent_seconds)
             except ValueError as error:
                 self.reply(400, json.dumps({'error': str(error)}).encode())
                 return
@@ -3074,16 +3111,36 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_header('X-Content-Type-Options', 'nosniff')
                 self.end_headers()
                 self.connection.settimeout(5)
+                was_allowed, last, wrote = False, 0, 0
                 while not session.exited:
                     try:
-                        packet = listener.get(timeout=1)
+                        # Notice being enabled quickly when there is recent audio to send.
+                        packets = [listener.get(timeout=.1 if prefill and not was_allowed else 1)]
                     except queue.Empty:
-                        packet = bytes(20)  # Keepalive while paused or between tracks.
-                    if not session.clients.allowed(client_id):
-                        packet = bytes(20)
-                    if compressor:
-                        packet = compressor.compress(packet) + compressor.flush(zlib.Z_SYNC_FLUSH)
-                    self.wfile.write(packet)
+                        packets = []
+                    if not packets and time.monotonic() - wrote >= 1:
+                        packets = [(0, bytes(20))]  # Keepalive while paused or between tracks.
+                    allowed = session.clients.allowed(client_id)
+                    # Just enabled, or audio was skipped while briefly disabled: catch up from the
+                    # recent audio. Everything queued is also there; repeats are skipped by sequence.
+                    if allowed and prefill:
+                        with session.audio_lock:
+                            skipped = listener in session.audio_skipped
+                            session.audio_skipped.discard(listener)
+                        if skipped or not was_allowed:
+                            packets = session.recent_audio(prefill) + packets
+                    was_allowed = allowed
+                    for sequence, packet in packets:
+                        if sequence:
+                            if sequence <= last:
+                                continue
+                            last = sequence
+                        if not allowed:
+                            packet = bytes(20)
+                        if compressor:
+                            packet = compressor.compress(packet) + compressor.flush(zlib.Z_SYNC_FLUSH)
+                        self.wfile.write(packet)
+                        wrote = time.monotonic()
                     self.wfile.flush()
                 if compressor:
                     self.wfile.write(compressor.flush(zlib.Z_FINISH))
@@ -3092,6 +3149,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             finally:
                 with session.audio_lock:
                     session.audio_listeners.pop(listener, None)
+                    session.audio_skipped.discard(listener)
             return
         if parsed.path.startswith('/api/artwork/'):
             if not self.valid_request():

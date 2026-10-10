@@ -3,6 +3,7 @@ package org.pianobarsuper.app.playback
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.os.Build
 import android.util.Log
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.booleanOrNull
@@ -21,6 +22,7 @@ import java.io.BufferedInputStream
 import java.io.DataInputStream
 import java.io.IOException
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
@@ -32,8 +34,11 @@ enum class StreamStatus { Connecting, Waiting, Playing, Reconnecting, SignInRequ
  * The phone as one of the server's listening devices: it registers like a
  * browser, keeps its lease with heartbeats, and plays the server's live PCM
  * through an AudioTrack. Runs on its own threads; never blocks the UI.
+ *
+ * [park] silences it at once and asks the server to stop sending audio, but
+ * keeps the registration and connection so [resume] can start again quickly.
  */
-class LiveStream(private val api: Api, private val deviceName: String, private val onStatus: (StreamStatus, String) -> Unit) {
+class LiveStream(val api: Api, private val deviceName: String, private val onStatus: (StreamStatus, String) -> Unit) {
     @Volatile var duck = 1f
     /** Muted for a phone call or another app's sound; the lease is kept. */
     @Volatile var held = false
@@ -43,6 +48,11 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
         private set
     @Volatile private var serverVolume = 1f
     @Volatile private var enabled = true
+    /** Bumped when this phone changes [enabled] itself, so an older heartbeat reply can't undo it. */
+    @Volatile private var enabledChange = 0
+    @Volatile private var parked = false
+    @Volatile private var output: AudioTrack? = null
+    private val playLock = Any()
     @Volatile private var status = StreamStatus.Connecting
     @Volatile private var underruns = 0
     private val heartbeats = Executors.newSingleThreadScheduledExecutor()
@@ -52,6 +62,46 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
     fun start() {
         thread = Thread({ run() }, "pianobar-pcm").also { it.start() }
         beat = heartbeats.scheduleWithFixedDelay({ heartbeat() }, 2, 10, TimeUnit.SECONDS)
+    }
+
+    /** Silence now and stop the server sending audio; keep the lease and connection. */
+    fun park() {
+        synchronized(playLock) { parked = true; output?.pause() }
+        // Report Playing again once audio flows after resume().
+        if (status == StreamStatus.Playing) set(StreamStatus.Waiting, "")
+        enabledChange++
+        background { sendEnabled() }
+    }
+
+    /** Undo [park]. False if this stream has ended and a new one is needed. */
+    fun resume(): Boolean {
+        if (cancelled) return false
+        synchronized(playLock) { parked = false }
+        // Assume the server agrees, so the first (prefilled) audio isn't dropped.
+        enabledChange++
+        enabled = true
+        background { sendEnabled(); keepServerSpeakers() }
+        return true
+    }
+
+    private fun background(work: () -> Unit) = try { heartbeats.execute(work) } catch (e: RejectedExecutionException) { }
+
+    private fun sendEnabled() {
+        val id = clientId
+        if (cancelled || id.isEmpty()) return
+        val change = enabledChange
+        val page = post("api/clients/update", buildJsonObject { put("id", id); put("enabled", !parked) }) ?: return
+        if (change == enabledChange) page["enabled"]?.jsonPrimitive?.booleanOrNull?.let { enabled = it }
+    }
+
+    /** Keep the server's own speakers going when the phone joins. */
+    private fun keepServerSpeakers() {
+        if (cancelled || parked) return
+        val state = try { api.client.newCall(api.request("api/state").build()).execute().use {
+            Api.check(it); json.parseToJsonElement(it.body?.string() ?: "{}").jsonObject["state"]?.jsonObject
+        } } catch (e: Exception) { null }
+        if (state?.get("output")?.jsonPrimitive?.content == "host")
+            post("api/command", buildJsonObject { put("output", "both") })
     }
 
     fun stop() {
@@ -84,35 +134,34 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
     private fun heartbeat() {
         val id = clientId
         if (cancelled || id.isEmpty()) return
-        val playing = status == StreamStatus.Playing && !held
+        val idle = held || parked
+        val playing = status == StreamStatus.Playing && !idle
+        val change = enabledChange
         val page = post("api/clients/heartbeat", buildJsonObject {
             put("id", id)
-            put("status", if (playing) "playing" else if (held) "idle" else "waiting")
-            put("ready", !held)
+            put("status", if (playing) "playing" else if (idle) "idle" else "waiting")
+            put("ready", !idle)
             put("underruns", underruns)
         }) ?: return
         page["volume"]?.jsonPrimitive?.doubleOrNull?.let { serverVolume = it.toFloat() }
-        page["enabled"]?.jsonPrimitive?.booleanOrNull?.let { enabled = it }
+        if (change == enabledChange) page["enabled"]?.jsonPrimitive?.booleanOrNull?.let { enabled = it }
     }
 
     private fun run() {
         var retry = 1
         while (!cancelled) {
-            var output: AudioTrack? = null
             var registered = ""
             try {
                 set(if (retry == 1) StreamStatus.Connecting else StreamStatus.Reconnecting, "")
                 registered = post("api/clients/register", buildJsonObject { put("name", deviceName) })
                     ?.get("id")?.jsonPrimitive?.content ?: throw IOException("Could not register this phone.")
                 clientId = registered
-                post("api/clients/update", buildJsonObject { put("id", registered); put("enabled", true) })
-                // Keep the server's own speakers going when the phone joins.
-                val state = try { api.client.newCall(api.request("api/state").build()).execute().use {
-                    Api.check(it); json.parseToJsonElement(it.body?.string() ?: "{}").jsonObject["state"]?.jsonObject
-                } } catch (e: LoginRequired) { throw e } catch (e: Exception) { null }
-                if (state?.get("output")?.jsonPrimitive?.content == "host")
-                    post("api/command", buildJsonObject { put("output", "both") })
-                val request = api.request("api/audio").header("X-Pianobar-Client", registered).build()
+                ListenTimer.mark("registered")
+                // Enable and check the server's output while the audio request opens: the server
+                // sends recent audio (the prefill) as soon as this phone is enabled.
+                background { sendEnabled(); keepServerSpeakers() }
+                val request = api.request("api/audio").header("X-Pianobar-Client", registered)
+                    .header("X-Pianobar-Prefill", PREFILL_SECONDS.toString()).build()
                 val current = api.streamClient.newCall(request)
                 call = current
                 if (cancelled) break
@@ -120,6 +169,7 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
                     Api.check(response)
                     if (response.header("Content-Type") != "application/octet-stream") throw LoginRequired()
                     set(StreamStatus.Waiting, "")
+                    ListenTimer.mark("audio opened")
                     DataInputStream(BufferedInputStream(response.body!!.byteStream(), 65536)).use { input ->
                         var rate = 0
                         var channels = 0
@@ -131,18 +181,22 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
                         var primed = false
                         var written = 0L
                         var lastUnderruns = 0
+                        // Listen-start timing: the first audio after connecting or unmuting.
+                        var starting = true
+                        var startHead = -1L
                         while (!cancelled) {
                             val frame = PcmFrame.read(input)
                             retry = 1
-                            val muted = held || !enabled
+                            val muted = held || !enabled || parked
                             if (muted && !wasMuted) output?.run { pause(); flush(); written = playbackHeadPosition.toLong() and 0xffffffffL; primed = false }
+                            if (muted) { starting = true; startHead = -1 }
                             wasMuted = muted
                             if (frame.samples.isEmpty() || muted) continue
+                            if (starting && startHead < 0 && !primed) { ListenTimer.mark("first audio frame"); startHead = 0 }
                             if (output == null || rate != frame.rate || channels != frame.channels) {
-                                output?.release()
                                 rate = frame.rate
                                 channels = frame.channels
-                                output = track(rate, channels)
+                                synchronized(playLock) { output?.release(); output = track(rate, channels) }
                                 epoch = frame.epoch
                                 written = 0
                                 primed = false
@@ -166,7 +220,7 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
                                 Log.i(TAG, "underrun; refilling a ${cushion}s cushion")
                             }
                             var offset = 0
-                            while (offset < frame.samples.size && !cancelled && !held && enabled) {
+                            while (offset < frame.samples.size && !cancelled && !held && enabled && !parked) {
                                 val count2 = track.write(frame.samples, offset, frame.samples.size - offset, AudioTrack.WRITE_NON_BLOCKING)
                                 if (count2 < 0) throw IOException("Audio output unavailable")
                                 offset += count2
@@ -174,11 +228,18 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
                                 if (!primed) {
                                     val buffered = written - (track.playbackHeadPosition.toLong() and 0xffffffffL)
                                     if (buffered >= (cushion * rate).toLong() || count2 == 0) {
-                                        track.play(); primed = true
+                                        // park() pauses under the same lock, so it can't be undone here.
+                                        synchronized(playLock) { if (!parked) { track.play(); primed = true } }
+                                        if (!primed) break
+                                        if (starting) { ListenTimer.mark("track playing"); startHead = track.playbackHeadPosition.toLong() and 0xffffffffL }
                                         if (status != StreamStatus.Playing) set(StreamStatus.Playing, "")
                                     }
                                 }
                                 if (count2 == 0) Thread.sleep(20)
+                            }
+                            if (starting && primed && (track.playbackHeadPosition.toLong() and 0xffffffffL) != startHead) {
+                                starting = false
+                                ListenTimer.finish("audible")
                             }
                         }
                     }
@@ -191,7 +252,7 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
             } catch (e: Exception) {
                 if (!cancelled) { Log.w(TAG, "stream interrupted", e); set(StreamStatus.Reconnecting, "Connection interrupted. Reconnecting…") }
             } finally {
-                output?.release()
+                synchronized(playLock) { output?.release(); output = null }
                 call = null
                 clientId = ""
                 if (registered.isNotEmpty() && !cancelled) post("api/clients/unregister", buildJsonObject { put("id", registered) })
@@ -200,6 +261,11 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
             try { Thread.sleep(retry * 1000L) } catch (e: InterruptedException) { break }
             retry = (retry * 2).coerceAtMost(15)
         }
+    }
+
+    private companion object {
+        /** Seconds of recent audio to ask the server for, so playback can start at once. */
+        const val PREFILL_SECONDS = 2
     }
 
     private fun track(rate: Int, channels: Int): AudioTrack {
@@ -213,5 +279,10 @@ class LiveStream(private val api: Api, private val deviceName: String, private v
             .setBufferSizeInBytes(maxOf(minimum, rate * channels * 2 * 6))
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
+            .also {
+                // By default a streaming track doesn't start until its whole buffer is full: about
+                // 4.5 s of silence after the cushion is ready. The cushion already guards underruns.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) it.setStartThresholdInFrames(minimum / (channels * 2))
+            }
     }
 }

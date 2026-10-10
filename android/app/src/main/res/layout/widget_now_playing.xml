@@ -29,4 +29,8 @@
             android:padding="11dp" android:contentDescription="@string/widget_next" />
         </LinearLayout>
     </LinearLayout>
+    <!-- The app's icon in the top-right corner, in its own column so it never covers text or buttons. -->
+    <ImageView android:id="@+id/widget_icon" android:layout_width="18dp" android:layout_height="18dp"
+        android:layout_gravity="top" android:layout_marginStart="6dp" android:src="@drawable/ic_pianobar"
+        android:scaleType="fitCenter" android:contentDescription="@string/widget_open" />
 </LinearLayout>

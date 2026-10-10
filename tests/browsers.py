@@ -89,6 +89,50 @@ try:
         if size:
             assert response.read(size) == packet[20:]
         connection.close()
+    # Prefill: a listener that asks gets the newest audio at once, both when it connects
+    # and when it is enabled again later, without repeats or audio from a cut song.
+    streaming = False
+    time.sleep(.2)
+    d = request('/api/clients/register', {'name': 'Phone'})['id']
+    for invalid in ('nan', '-1', '11', 'soon'):
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=4)
+        connection.request('GET', '/api/audio', headers={'Authorization': 'Basic test', 'X-Pianobar-Client': d,
+                                                         'X-Pianobar-Prefill': invalid})
+        assert connection.getresponse().status == 400, invalid
+        connection.close()
+
+    def quarter(number, epoch=2):  # 0.25 s of 44.1 kHz stereo, filled with its number.
+        writer.send(struct.pack('!5I', 44100, 44100, 2, 1, epoch) + bytes([number]) * 44100)
+        time.sleep(.01)
+
+    quarter(99, epoch=1)
+    for number in range(12):
+        quarter(number)
+    connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=4)
+    connection.request('GET', '/api/audio', headers={'Authorization': 'Basic test', 'X-Pianobar-Client': d,
+                                                     'X-Pianobar-Prefill': '1'})
+    response = connection.getresponse()
+    assert response.status == 200
+
+    def frame():
+        size = struct.unpack('!5I', response.read(20))[0]
+        return response.read(size)[0] if size else None
+
+    assert frame() is None  # Not enabled yet: keepalives only.
+    request('/api/clients/update', {'id': d, 'enabled': True})
+    while (first := frame()) is None:
+        pass
+    assert [first] + [frame() for _ in range(3)] == [8, 9, 10, 11]
+    quarter(12)
+    assert frame() == 12
+    request('/api/clients/update', {'id': d, 'enabled': False})
+    quarter(13)
+    request('/api/clients/update', {'id': d, 'enabled': True})
+    quarter(14)
+    while (resumed := frame()) is None:
+        pass
+    assert (resumed, frame()) == (13, 14)  # Only audio it hasn't had.
+    connection.close()
     request('/api/clients/unregister', {'id': a})
     assert not registry.allowed(a)
     with patch.object(module['time'], 'monotonic', return_value=time.monotonic() + registry.lease + 1):

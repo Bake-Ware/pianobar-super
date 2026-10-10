@@ -4,4 +4,5 @@
     <string name="widget_next">Next song</string>
     <string name="widget_love">Love song</string>
     <string name="widget_art">Album art</string>
+    <string name="widget_open">Open pianobar</string>
 </resources>
