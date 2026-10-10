@@ -80,8 +80,12 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
         const val LISTEN = "pianobar.listen"
         const val STOP_LISTENING = "pianobar.stop_listening"
         const val PLAY_LOCAL = "pianobar.play_local"
-        /** How long a stopped stream stays connected (heartbeats keep its server lease). */
-        const val WARM_MS = 75_000L
+        /**
+         * How long a stopped stream stays connected (heartbeats keep its server lease), long
+         * enough for a drive-through order. Media3 keeps the service in the foreground for the
+         * same time after playback stops, so the process isn't frozen meanwhile.
+         */
+        const val WARM_MS = 10 * 60_000L
         @Volatile var instance: PlaybackService? = null
             private set
     }
@@ -136,6 +140,7 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
         session = MediaSession.Builder(this, live).setSessionActivity(open).build()
         // Show the media notification without waiting for a controller to connect.
         addSession(session)
+        setForegroundServiceTimeoutMs(WARM_MS)
         setMediaNotificationProvider(DefaultMediaNotificationProvider.Builder(this).build().apply { setSmallIcon(R.drawable.ic_note) })
         scope.launch {
             app.repo.snapshot.collect { snapshot ->
