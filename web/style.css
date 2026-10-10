@@ -1231,7 +1231,7 @@ main > footer { position: fixed; z-index: 2; left: var(--sidebar-width); right: 
 #settings-form legend { font-size: 16px; padding: 0 14px 0 0; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
 .settings-grid label { display: flex; flex-direction: column; gap: 10px; font-size: 12px; }
-.settings-grid input, .settings-grid select { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font: inherit; border-radius: 0; }
+.settings-grid input, .settings-grid select, .settings-grid textarea { width: 100%; min-width: 0; padding: 12px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font: inherit; border-radius: 0; }
 .settings-hint, #settings-status { font-size: 12px; line-height: 1.7; color: var(--muted); }
 .android-download { display: inline-block; padding: 14px 18px; background: var(--orange); color: #172b2b; font-weight: 700; text-decoration: none; }
 .android-download:focus-visible { outline: 2px solid var(--ink); outline-offset: 4px; }
@@ -1761,6 +1761,7 @@ body[data-pinned="true"] #widget-pin {
 .settings-grid label output { font-variant-numeric: tabular-nums; color: var(--muted); }
 .mcp-servers { display: grid; gap: 14px; }
 .mcp-server { padding: 16px; border: 1px solid var(--line); background: var(--paper); }
+.mcp-server textarea { font-family: ui-monospace, monospace; font-size: 12px; resize: vertical; }
 .mcp-server .settings-checks { margin-top: 14px; grid-template-columns: repeat(auto-fit, minmax(160px, max-content)); align-items: center; gap: 14px 22px; }
 .mcp-server .mcp-remove { justify-self: start; padding: 8px 12px; border: 1px solid var(--line); background: var(--selected); color: var(--ink); }
 .mcp-actions { margin-top: 14px; }
