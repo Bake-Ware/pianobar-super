@@ -2,7 +2,9 @@ package org.pianobarsuper.app
 
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.pianobarsuper.app.net.PcmFrame
 import java.io.ByteArrayInputStream
@@ -35,6 +37,11 @@ class PcmFrameTest {
 
     @Test fun keepaliveAndMalformedFrames() {
         assertEquals(0, parse(ByteArray(20)).samples.size)
+        assertFalse(parse(ByteArray(20)).voiceMark)
+        val mark = parse(ByteArray(20).also { it[19] = 1 })
+        assertTrue(mark.voiceMark && mark.samples.isEmpty())
+        assertThrows(IOException::class.java) { parse(ByteArray(20).also { it[19] = 2 }) }
+        assertFalse(parse(frame(4, 44100, 2, 1, ByteArray(4))).voiceMark)
         for (bad in listOf(frame(-1, 44100, 2, 1, ByteArray(0)), frame(10000000, 44100, 2, 1, ByteArray(0)),
             frame(2, 44100, 2, 1, ByteArray(2)), frame(4, 44100, 8, 1, ByteArray(4)), frame(4, 0, 2, 1, ByteArray(4)),
             frame(4, 44100, 2, 5, ByteArray(4)), frame(4, 44100, 2, 1, ByteArray(3)), ByteArray(19))) {

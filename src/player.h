@@ -63,6 +63,7 @@ typedef struct {
 	size_t voiceFrames, voicePos;
 	unsigned int voiceRate, voiceChannels, voiceId, voiceDoneId;
 	bool voiceOverMusic;
+	bool voiceMark; /* tell browsers a DJ line starts with the next frame */
 	float duck; /* current music gain, lowered while the DJ talks */
 	float voiceDuck; /* music gain to dip to under the current line */
 	unsigned int outRate, outChannels; /* format of the last played frame */

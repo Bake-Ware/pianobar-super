@@ -114,6 +114,7 @@ void BarPlayerInit (player_t * const p, const BarSettings_t * const settings) {
 	p->voiceFrames = p->voicePos = 0;
 	p->voiceRate = p->voiceChannels = p->voiceId = p->voiceDoneId = 0;
 	p->voiceOverMusic = true;
+	p->voiceMark = false;
 	p->duck = 1.0f;
 	p->voiceDuck = powf (10.0f, VOICE_DUCK_DB / 20.0f);
 	p->outRate = p->outChannels = 0;
@@ -674,6 +675,16 @@ static void browserAudio (player_t *player, const int16_t *data, int frames,
 	sendmsg (player->audioFd, &message, MSG_DONTWAIT | MSG_NOSIGNAL);
 }
 
+/*	An empty frame whose last field is 1: a DJ line starts with the next
+ *	frame, so listeners can rebuild their buffer before it. Never sent to
+ *	the host device.
+ */
+static void browserVoiceMark (player_t *player) {
+	if (player->audioFd < 0) { return; }
+	const uint32_t header[] = {0, 0, 0, 0, htonl (1)};
+	send (player->audioFd, header, sizeof (header), MSG_DONTWAIT | MSG_NOSIGNAL);
+}
+
 /*	Play interleaved S16 samples on the selected outputs. Without a host
  *	device, pace output in real time so browsers and the DJ stay in sync.
  *	Returns false when the host device failed.
@@ -701,7 +712,14 @@ static bool emit (player_t * const player, const int16_t *data, int frames,
 		const struct timespec until = {.tv_sec = *deadline / 1000000000, .tv_nsec = *deadline % 1000000000};
 		clock_nanosleep (CLOCK_MONOTONIC, TIMER_ABSTIME, &until, NULL);
 	}
-	if ((output & 2) != 0 && outputOk) { browserAudio (player, data, frames, rate, channels); }
+	pthread_mutex_lock (&player->lock);
+	const bool mark = player->voiceMark;
+	player->voiceMark = false;
+	pthread_mutex_unlock (&player->lock);
+	if ((output & 2) != 0 && outputOk) {
+		if (mark) { browserVoiceMark (player); }
+		browserAudio (player, data, frames, rate, channels);
+	}
 	return outputOk;
 }
 
@@ -1004,6 +1022,7 @@ bool BarPlayerLoadVoice (player_t * const player, const char *path,
 	player->voiceChannels = channels;
 	player->voiceOverMusic = overMusic;
 	player->voiceId = id;
+	player->voiceMark = samples != NULL;
 	if (samples == NULL) { player->voiceDoneId = id; }
 	pthread_mutex_unlock (&player->lock);
 	if (samples == NULL) {

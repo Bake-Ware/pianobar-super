@@ -2374,6 +2374,10 @@ class DJ:
             self.voice_slots.release()
 
 
+# An empty PCM frame whose last field is 1: the player's mark that a DJ line starts next.
+VOICE_MARK = struct.pack('!5I', 0, 0, 0, 0, 1)
+
+
 class Session:
     def __init__(self):
         self.condition = threading.Condition()
@@ -2397,6 +2401,7 @@ class Session:
         self.audio_recent_total = 0.0
         self.audio_sequence = 0
         self.audio_skipped = set()  # Listeners that missed audio while disabled.
+        self.audio_marked = set()  # Listeners that want DJ-line marks in the stream.
         self.clients = Browsers()
         self.initial_output = 'host'
         self.setup_required = False
@@ -2438,6 +2443,14 @@ class Session:
             if len(packet) < 20:
                 continue
             size, rate, channels, little, epoch = struct.unpack('!5I', packet[:20])
+            if packet == VOICE_MARK:
+                # A DJ line starts with the next frame; only listeners that asked understand this.
+                with self.audio_lock:
+                    for listener in self.audio_marked:
+                        if self.clients.allowed(self.audio_listeners.get(listener)):
+                            with contextlib.suppress(queue.Full):
+                                listener.put_nowait((0, packet))
+                continue
             if size != len(packet) - 20 or not 8000 <= rate <= 192000 or not 1 <= channels <= 8:
                 continue
             with self.audio_lock:
@@ -3094,11 +3107,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not 0 <= prefill <= 10:
                     raise ValueError('X-Pianobar-Prefill must be 0–10 seconds.')
                 prefill = min(prefill, session.audio_recent_seconds)
+                marks = self.headers.get('X-Pianobar-Marks', '')
+                if marks not in ('', 'voice'):
+                    raise ValueError('X-Pianobar-Marks must be "voice".')
             except ValueError as error:
                 self.reply(400, json.dumps({'error': str(error)}).encode())
                 return
             with session.audio_lock:
                 session.audio_listeners[listener] = client_id
+                if marks:
+                    session.audio_marked.add(listener)
             try:
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/octet-stream')
@@ -3150,6 +3168,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 with session.audio_lock:
                     session.audio_listeners.pop(listener, None)
                     session.audio_skipped.discard(listener)
+                    session.audio_marked.discard(listener)
             return
         if parsed.path.startswith('/api/artwork/'):
             if not self.valid_request():

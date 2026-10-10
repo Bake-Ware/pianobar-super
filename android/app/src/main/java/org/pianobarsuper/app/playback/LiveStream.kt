@@ -161,7 +161,7 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
                 // sends recent audio (the prefill) as soon as this phone is enabled.
                 background { sendEnabled(); keepServerSpeakers() }
                 val request = api.request("api/audio").header("X-Pianobar-Client", registered)
-                    .header("X-Pianobar-Prefill", PREFILL_SECONDS.toString()).build()
+                    .header("X-Pianobar-Prefill", PREFILL_SECONDS.toString()).header("X-Pianobar-Marks", "voice").build()
                 val current = api.streamClient.newCall(request)
                 call = current
                 if (cancelled) break
@@ -175,9 +175,13 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
                         var channels = 0
                         var epoch = -1
                         var wasMuted = false
-                        // Jitter buffer: audio arrives in bursts (proxies, Wi-Fi), so hold a cushion
-                        // before playing and refill it after an underrun, growing it each time.
-                        var cushion = 1.5f
+                        // Jitter buffer: audio arrives in bursts (proxies, Wi-Fi). Play the moment audio
+                        // arrives (the server's prefill usually builds a buffer at once), then refill
+                        // to [target] where a pause is least noticed: just before the DJ talks, or
+                        // after running dry. Each underrun grows the target.
+                        var target = 1.5f
+                        var cushion = 0f
+                        var breaks = 0
                         var primed = false
                         var written = 0L
                         var lastUnderruns = 0
@@ -189,8 +193,18 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
                             retry = 1
                             val muted = held || !enabled || parked
                             if (muted && !wasMuted) output?.run { pause(); flush(); written = playbackHeadPosition.toLong() and 0xffffffffL; primed = false }
-                            if (muted) { starting = true; startHead = -1 }
+                            if (muted) { starting = true; startHead = -1; cushion = 0f }
                             wasMuted = muted
+                            val track0 = output
+                            if (frame.voiceMark && !muted && track0 != null) {
+                                // The DJ starts with the next frame: hold here, before the line, until
+                                // the buffer is back to the target. The DJ plays a little behind live.
+                                breaks++
+                                val buffered = written - (track0.playbackHeadPosition.toLong() and 0xffffffffL)
+                                // Not worth a pause for a few hundred milliseconds.
+                                if (primed && buffered < ((target - .25f) * rate).toLong()) { track0.pause(); primed = false; cushion = target }
+                                Log.i(TAG, "DJ break $breaks: buffer ${buffered * 1000 / maxOf(rate, 1)} ms, target ${(target * 1000).toInt()} ms")
+                            }
                             if (frame.samples.isEmpty() || muted) continue
                             if (starting && startHead < 0 && !primed) { ListenTimer.mark("first audio frame"); startHead = 0 }
                             if (output == null || rate != frame.rate || channels != frame.channels) {
@@ -208,16 +222,18 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
                                 track.pause(); track.flush(); epoch = frame.epoch
                                 written = track.playbackHeadPosition.toLong() and 0xffffffffL
                                 primed = false
+                                cushion = 0f
                             }
                             track.setVolume(serverVolume * duck)
                             val count = track.underrunCount
                             if (count > lastUnderruns) {
-                                // Ran dry: pause (keeping what is queued) and refill a bigger cushion.
+                                // Ran dry: pause (keeping what is queued), refill, and aim higher next time.
                                 lastUnderruns = count
                                 underruns++
-                                cushion = (cushion + .5f).coerceAtMost(4f)
+                                cushion = target
+                                target = (target + .5f).coerceAtMost(4f)
                                 if (primed) { track.pause(); primed = false }
-                                Log.i(TAG, "underrun; refilling a ${cushion}s cushion")
+                                Log.i(TAG, "underrun $underruns after $breaks DJ breaks; refilling a ${cushion}s cushion")
                             }
                             var offset = 0
                             while (offset < frame.samples.size && !cancelled && !held && enabled && !parked) {
@@ -280,8 +296,8 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
             .setTransferMode(AudioTrack.MODE_STREAM)
             .build()
             .also {
-                // By default a streaming track doesn't start until its whole buffer is full: about
-                // 4.5 s of silence after the cushion is ready. The cushion already guards underruns.
+                // By default a streaming track doesn't start until its whole buffer is full (about
+                // 4.5 s of silence); start as soon as there is anything to play.
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) it.setStartThresholdInFrames(minimum / (channels * 2))
             }
     }

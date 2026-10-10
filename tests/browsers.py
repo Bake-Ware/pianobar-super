@@ -133,6 +133,34 @@ try:
         pass
     assert (resumed, frame()) == (13, 14)  # Only audio it hasn't had.
     connection.close()
+    # DJ-line marks go, in order, only to listeners that ask for them.
+    request('/api/clients/update', {'id': d, 'enabled': True})
+    connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=4)
+    connection.request('GET', '/api/audio', headers={'Authorization': 'Basic test', 'X-Pianobar-Client': d,
+                                                     'X-Pianobar-Marks': 'bad'})
+    assert connection.getresponse().status == 400
+    connection.close()
+    streams = []
+    for marks in ('voice', ''):
+        connection = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=4)
+        connection.request('GET', '/api/audio', headers={'Authorization': 'Basic test', 'X-Pianobar-Client': d,
+                                                         'X-Pianobar-Marks': marks})
+        streams.append(connection.getresponse())
+    time.sleep(.2)
+    quarter(15)
+    writer.send(module['VOICE_MARK'])
+    time.sleep(.01)
+    quarter(16)
+    for response, expected in zip(streams, ([15, 'mark', 16], [15, 16])):
+        seen = []
+        while len(seen) < len(expected):
+            header = struct.unpack('!5I', response.read(20))
+            if header[0]:
+                seen.append(response.read(header[0])[0])
+            elif header[4] == 1:
+                seen.append('mark')
+        assert seen == expected, (seen, expected)
+        response.close()
     request('/api/clients/unregister', {'id': a})
     assert not registry.allowed(a)
     with patch.object(module['time'], 'monotonic', return_value=time.monotonic() + registry.lease + 1):
