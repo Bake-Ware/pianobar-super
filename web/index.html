@@ -178,6 +178,20 @@
           <fieldset><legend>Station hopping</legend><div class="settings-grid">
             <label>Songs per station<input id="setting-dj-hop_songs" type="number" min="1" max="20" value="4"><small>When “Hops stations” is on, the DJ moves to a random station after this many songs.</small></label>
           </div></fieldset>
+          <fieldset><legend>Weather &amp; time</legend>
+            <p class="settings-hint">The DJ knows the local time and can check the weather here (Open-Meteo, no account needed).</p>
+            <div class="settings-grid">
+            <label class="settings-wide">Place name<input id="setting-dj-weather_place" maxlength="100" placeholder="San Antonio, TX"></label>
+            <label>Latitude<input id="setting-dj-weather_lat" type="number" min="-90" max="90" step="0.0001" required></label>
+            <label>Longitude<input id="setting-dj-weather_lon" type="number" min="-180" max="180" step="0.0001" required></label>
+          </div></fieldset>
+          <fieldset><legend>Tool servers (MCP)</legend>
+            <p class="settings-hint">MCP servers the DJ may call while writing intros. The note tells the DJ what each one is good for, e.g. “See what’s happening in Rook world and riff on it.” Auth stays on this server and is never shown again after saving.</p>
+            <div id="mcp-servers" class="mcp-servers"></div>
+            <div class="settings-buttons mcp-actions"><button id="add-mcp-server" type="button">Add server</button><button id="check-mcp-servers" type="button">Check saved servers</button></div>
+            <p id="mcp-status" class="settings-hint" role="status"></p>
+            <p class="settings-hint">This station is an MCP server too: point an agent at <code id="station-mcp-url">/mcp</code> (same sign-in as this page) to call in, request songs or see what’s playing.</p>
+          </fieldset>
         </div>
         <div class="settings-panel" role="tabpanel" id="settings-panel-connections" aria-labelledby="settings-tab-connections" hidden>
           <p class="settings-lead">The servers the DJ uses to write and to speak. Keys stay on this server and are never shown again after saving.</p>

@@ -9,6 +9,7 @@ import runpy
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import urllib.error
 import urllib.request
@@ -19,6 +20,9 @@ state = json.loads(result.splitlines()[-1])
 delete_prompt = state.pop('testDeletePrompt')
 assert [s['id'] for s in state['stations']] == ['101', '202']
 assert state['stations'][0]['quickMix']
+# Keep the DJ's memory and settings out of the real config folder.
+CONFIG = tempfile.TemporaryDirectory()
+os.environ['XDG_CONFIG_HOME'] = CONFIG.name
 host = runpy.run_path(str(ROOT / 'pianobar-web'))
 session = host['Session']()
 session.state = state

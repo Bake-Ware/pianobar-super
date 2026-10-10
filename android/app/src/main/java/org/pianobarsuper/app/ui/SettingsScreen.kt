@@ -35,6 +35,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,12 +50,14 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -68,7 +71,8 @@ import kotlin.math.roundToInt
  */
 private sealed interface Field { val key: String; val label: String; val hint: String }
 private data class TextField(override val key: String, override val label: String, override val hint: String = "",
-                             val secret: Boolean = false, val number: IntRange? = null, val multiline: Boolean = false) : Field
+                             val secret: Boolean = false, val number: IntRange? = null, val multiline: Boolean = false,
+                             val decimal: ClosedFloatingPointRange<Double>? = null) : Field
 private data class Toggle(override val key: String, override val label: String, override val hint: String = "") : Field
 private data class Level(override val key: String, override val label: String, val range: IntRange,
                          val format: (Int) -> String, override val hint: String = "", val default: Int = 0) : Field
@@ -120,6 +124,11 @@ private val sections: List<List<Pair<String, List<Field>>>> = listOf(
             TextField("dj.set_minutes", "Minutes per set", number = 1..120),
         ),
         "Station hopping" to listOf(TextField("dj.hop_songs", "Songs per station", "How many songs before hopping to a random station.", number = 1..20)),
+        "Weather & time" to listOf(
+            TextField("dj.weather_place", "Place name", "The DJ knows the local time and can check the weather here (Open-Meteo)."),
+            TextField("dj.weather_lat", "Latitude", decimal = -90.0..90.0),
+            TextField("dj.weather_lon", "Longitude", decimal = -180.0..180.0),
+        ),
     ),
     listOf(
         "Language model" to listOf(
@@ -145,6 +154,18 @@ private val sections: List<List<Pair<String, List<Field>>>> = listOf(
     ),
 )
 
+/** One of the DJ's MCP servers as edited here; a blank auth keeps the saved one. */
+private data class McpServer(val id: String? = null, val name: String = "", val url: String = "", val hint: String = "",
+                             val enabled: Boolean = true, val authSet: Boolean = false, val auth: String = "", val clearAuth: Boolean = false) {
+    fun json() = buildJsonObject {
+        id?.let { put("id", JsonPrimitive(it)) }
+        put("name", JsonPrimitive(name.trim())); put("url", JsonPrimitive(url.trim()))
+        put("hint", JsonPrimitive(hint)); put("enabled", JsonPrimitive(enabled))
+        if (auth.isNotEmpty()) put("auth", JsonPrimitive(auth))
+        if (clearAuth) put("clear_auth", JsonPrimitive(true))
+    }
+}
+
 private fun JsonObject.lookup(key: String): JsonElement? {
     val parts = key.split(".")
     return if (parts.size == 1) this[key] else (this[parts[0]] as? JsonObject)?.get(parts[1])
@@ -162,9 +183,19 @@ fun SettingsScreen(back: () -> Unit) {
     var status by remember { mutableStateOf("") }
     var saving by remember { mutableStateOf(false) }
     var voices by remember { mutableStateOf(listOf<String>()) }
+    val mcp = remember { mutableStateListOf<McpServer>() }
+    var mcpDirty by remember { mutableStateOf(false) }
     fun load() = scope.launch {
         val loaded = repo.loadSettings() ?: return@launch
         baseline = loaded
+        mcp.clear()
+        (loaded.lookup("dj.mcp_servers") as? JsonArray)?.forEach { item ->
+            val server = item as? JsonObject ?: return@forEach
+            fun text(key: String) = server[key]?.jsonPrimitive?.contentOrNull ?: ""
+            mcp.add(McpServer(text("id"), text("name"), text("url"), text("hint"), server["enabled"]?.jsonPrimitive?.booleanOrNull ?: true,
+                server["authSet"]?.jsonPrimitive?.booleanOrNull ?: false))
+        }
+        mcpDirty = false
         values.clear()
         for (field in sections.flatten().flatMap { it.second }) {
             val element = loaded.lookup(field.key)
@@ -187,11 +218,13 @@ fun SettingsScreen(back: () -> Unit) {
             val value: JsonElement = when {
                 field is Toggle -> JsonPrimitive(raw.toBoolean())
                 field is TextField && field.number != null -> JsonPrimitive(raw.toIntOrNull() ?: continue)
+                field is TextField && field.decimal != null -> JsonPrimitive(raw.toDoubleOrNull()?.takeIf { it in field.decimal } ?: continue)
                 field is Level -> JsonPrimitive(raw.toIntOrNull() ?: continue)
                 else -> JsonPrimitive(raw)
             }
             if (field is TextField && field.secret) { if (raw.isEmpty()) continue }
             else if (field is Toggle && (field.key.endsWith("clearPassword") || field.key.contains("clear_"))) { if (!raw.toBoolean()) continue }
+            else if (field is TextField && field.decimal != null) { if (value.jsonPrimitive.doubleOrNull == old?.jsonPrimitive?.doubleOrNull) continue }
             else if (value == old || (old?.jsonPrimitive?.intOrNull != null && value.jsonPrimitive.intOrNull == old.jsonPrimitive.intOrNull && (field is Level || field is TextField && field.number != null))) continue
             val parts = field.key.split(".")
             if (parts.size == 2) {
@@ -199,6 +232,7 @@ fun SettingsScreen(back: () -> Unit) {
                 nested.getOrPut(parts[0]) { mutableMapOf() }[parts[1]] = value
             } else top[field.key] = value
         }
+        if (mcpDirty) nested.getOrPut("dj") { mutableMapOf() }["mcp_servers"] = JsonArray(mcp.map { it.json() })
         nested.forEach { (k, v) -> top[k] = JsonObject(v) }
         return JsonObject(top)
     }
@@ -231,6 +265,10 @@ fun SettingsScreen(back: () -> Unit) {
                     if (locked) Text("Set by an environment variable on the server.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 HorizontalDivider()
+            }
+            if (tab == 2) McpServers(mcp) { index, server ->
+                if (server == null) mcp.removeAt(index) else if (index == mcp.size) mcp.add(server) else mcp[index] = server
+                mcpDirty = true
             }
             if (tab == 2) TryTheDj(values["dj.voice"] ?: "", snapshot?.djStation?.voiceReady == true, snapshot?.djStation?.llmReady == true)
             if (status.isNotEmpty()) Text(status, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -284,11 +322,42 @@ private fun FieldEditor(field: Field, value: String, voices: List<String>?, enab
             supportingText = if (field.hint.isNotEmpty() || field.number != null) ({
                 Text(listOf(field.hint, field.number?.let { "${it.first}–${it.last}" } ?: "").filter { it.isNotEmpty() }.joinToString(" "))
             }) else null,
-            isError = field.number != null && value.isNotEmpty() && value.toIntOrNull()?.let { it in field.number } != true,
+            isError = field.number != null && value.isNotEmpty() && value.toIntOrNull()?.let { it in field.number } != true ||
+                field.decimal != null && value.toDoubleOrNull()?.let { it in field.decimal } != true,
             singleLine = !field.multiline, minLines = if (field.multiline) 2 else 1,
             visualTransformation = if (field.secret) PasswordVisualTransformation() else androidx.compose.ui.text.input.VisualTransformation.None,
-            keyboardOptions = KeyboardOptions(keyboardType = when { field.secret -> KeyboardType.Password; field.number != null -> KeyboardType.Number; else -> KeyboardType.Text }))
+            keyboardOptions = KeyboardOptions(keyboardType = when { field.secret -> KeyboardType.Password; field.number != null -> KeyboardType.Number
+                field.decimal != null -> KeyboardType.Decimal; else -> KeyboardType.Text }))
     }
+}
+
+/** Settings → DJ → Tool servers: MCP servers the DJ may consult while writing intros. */
+@Composable
+private fun McpServers(servers: List<McpServer>, edit: (Int, McpServer?) -> Unit) {
+    Text("Tool servers (MCP)", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+    Text("Servers the DJ may call while writing intros. The note tells the DJ what each is good for. Auth stays on the server.",
+        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    servers.forEachIndexed { index, server ->
+        Surface(tonalElevation = 1.dp, shape = MaterialTheme.shapes.small) {
+            Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(server.name, { edit(index, server.copy(name = it.take(60))) }, Modifier.fillMaxWidth(), label = { Text("Name") }, singleLine = true)
+                OutlinedTextField(server.url, { edit(index, server.copy(url = it)) }, Modifier.fillMaxWidth(), label = { Text("Endpoint URL") }, singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri))
+                OutlinedTextField(server.auth, { edit(index, server.copy(auth = it)) }, Modifier.fillMaxWidth(), label = { Text("Auth") }, singleLine = true,
+                    supportingText = { Text(if (server.authSet) "Saved. Leave blank to keep it." else "Optional bearer token or full header value.") },
+                    visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password))
+                OutlinedTextField(server.hint, { edit(index, server.copy(hint = it)) }, Modifier.fillMaxWidth(), label = { Text("Note for the DJ") },
+                    placeholder = { Text("See what's happening in Rook world and riff on it.") }, minLines = 2)
+                FieldEditor(Toggle("enabled", "Enabled"), server.enabled.toString(), null, true) { edit(index, server.copy(enabled = it.toBoolean())) }
+                if (server.authSet) FieldEditor(Toggle("clear_auth", "Forget saved auth"), server.clearAuth.toString(), null, true) {
+                    edit(index, server.copy(clearAuth = it.toBoolean()))
+                }
+                OutlinedButton(onClick = { edit(index, null) }) { Text("Remove") }
+            }
+        }
+    }
+    if (servers.size < 8) OutlinedButton(onClick = { edit(servers.size, McpServer()) }) { Text("Add server") }
+    HorizontalDivider()
 }
 
 /** Settings → DJ → Try your DJ: hear a voice, speak a line, or ask for an intro now. */

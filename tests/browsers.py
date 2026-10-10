@@ -4,13 +4,18 @@ import http.client
 import http.server
 import json
 from pathlib import Path
+import os
 import runpy
 import socket
 import struct
+import tempfile
 import threading
 import time
 from unittest.mock import patch
 
+# Keep the DJ's memory and settings out of the real config folder.
+CONFIG = tempfile.TemporaryDirectory()
+os.environ['XDG_CONFIG_HOME'] = CONFIG.name
 module = runpy.run_path(str(Path(__file__).resolve().parents[1] / 'pianobar-web'))
 session = module['Session']()
 registry = session.clients
