@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#172b2b">
+  <title>Sign in · pianobar</title>
+  <link rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/public.css">
+  <script src="/login.js" defer></script>
+</head>
+<body>
+  <main class="card">
+    <span class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>pianobar<span class="brand-dot">.</span></span></span>
+    <a class="button" href="/radio">▶ Listen to the radio</a>
+    <p class="footnote">Anyone can listen. Only you can change what's playing.</p>
+    <div class="divider">or sign in to control it</div>
+    <form id="login" class="stack">
+      <label>Web password<input id="password" type="password" name="password" autocomplete="current-password" required maxlength="450"></label>
+      <p id="error" class="error" role="alert"></p>
+      <button id="submit" class="button secondary" type="submit">Sign in</button>
+    </form>
+  </main>
+</body>
+</html>

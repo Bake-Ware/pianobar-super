@@ -1470,6 +1470,8 @@ async function watch() {
   while (true) {
     try {
       const response = await fetch(`/api/state?after=${revision}`);
+      // Signed out (or the password changed): show the sign-in page.
+      if (response.status === 401) { location.reload(); return; }
       const data = await response.json();
       if (!response.ok) {
         notify(data.error || 'Cannot connect to the player.');
@@ -1488,6 +1490,10 @@ async function watch() {
   }
 }
 watch();
+$('sign-out').addEventListener('click', async () => {
+  try { await fetch('/api/logout', {method: 'POST'}); } catch (_) {}
+  location.reload();
+});
 setInterval(() => {
   if (!snapshot.exited && ['library', 'playlists'].includes(document.body.dataset.view) && !document.hidden) refreshLibrary();
 }, 5000);

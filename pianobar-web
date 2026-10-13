@@ -12,6 +12,7 @@ import collections
 import contextlib
 import gzip
 import hashlib
+import hmac
 import unicodedata
 import urllib.request
 import urllib.error
@@ -2550,6 +2551,155 @@ class DJ:
 VOICE_MARK = struct.pack('!5I', 0, 0, 0, 0, 1)
 
 
+class Radio:
+    """The public, listen-only stream at /radio: one shared MP3 encoder fed with
+    the player's live audio, fanned out to anyone listening. It never registers
+    a device or changes anything about the player."""
+    limit = 25          # listeners at once
+    backlog = 2.0       # seconds of MP3 a new listener starts with
+    idle = 30           # seconds without listeners before the encoder stops
+    gap = 1.0           # seconds without audio (paused) before silence fills in
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.listeners = set()
+        self.pcm = queue.Queue(maxsize=256)
+        self.recent = collections.deque()  # (received, chunk) of encoded MP3
+        self.thread = None
+
+    def count(self):
+        with self.lock:
+            return len(self.listeners)
+
+    def feed(self, rate, channels, little, data):
+        if self.listeners:
+            with contextlib.suppress(queue.Full):
+                self.pcm.put_nowait((rate, channels, little, data))
+
+    def join(self):
+        if not shutil.which('ffmpeg'):
+            raise RuntimeError('The radio needs ffmpeg on the server.')
+        with self.lock:
+            if len(self.listeners) >= self.limit:
+                return None
+            listener = queue.Queue(maxsize=256)
+            self.listeners.add(listener)
+            now = time.monotonic()
+            backlog = [chunk for received, chunk in self.recent if now - received <= self.backlog]
+            if self.thread is None:
+                self.thread = threading.Thread(target=self.run, daemon=True)
+                self.thread.start()
+            return listener, backlog
+
+    def leave(self, listener):
+        with self.lock:
+            self.listeners.discard(listener)
+
+    def publish(self, stdout):
+        while True:
+            chunk = os.read(stdout.fileno(), 8192)
+            if not chunk:
+                return
+            now = time.monotonic()
+            with self.lock:
+                self.recent.append((now, chunk))
+                while self.recent and now - self.recent[0][0] > self.backlog:
+                    self.recent.popleft()
+                for listener in self.listeners:
+                    if listener.full():
+                        # A listener that can't keep up skips ahead instead of holding everyone back.
+                        with contextlib.suppress(queue.Empty):
+                            listener.get_nowait()
+                    listener.put_nowait(chunk)
+
+    def run(self):
+        encoder, form, heard, empty_since = None, None, time.monotonic(), None
+        try:
+            while True:
+                with self.lock:
+                    if self.listeners:
+                        empty_since = None
+                    elif empty_since is None:
+                        empty_since = time.monotonic()
+                    elif time.monotonic() - empty_since > self.idle:
+                        self.thread = None
+                        self.recent.clear()
+                        return
+                try:
+                    rate, channels, little, data = self.pcm.get(timeout=.25)
+                    heard = time.monotonic()
+                except queue.Empty:
+                    if time.monotonic() - heard < self.gap:
+                        continue
+                    # Paused or between songs: keep the stream flowing so players don't give up.
+                    rate, channels, little = form or (44100, 2, True)
+                    data = bytes(int(rate * .25) * channels * 2)
+                if (rate, channels, little) != form:
+                    if encoder:
+                        encoder.stdin.close()
+                        encoder.wait(timeout=5)
+                    encoder = subprocess.Popen(
+                        ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-f', 's16le' if little else 's16be',
+                         '-ar', str(rate), '-ac', str(channels), '-i', 'pipe:0', '-ac', '2', '-c:a', 'libmp3lame',
+                         '-b:a', '128k', '-flush_packets', '1', '-f', 'mp3', 'pipe:1'],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                    threading.Thread(target=self.publish, args=(encoder.stdout,), daemon=True).start()
+                    form = (rate, channels, little)
+                try:
+                    encoder.stdin.write(data)
+                    encoder.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    form = None  # Start a new encoder with the next audio.
+        except Exception:
+            with self.lock:
+                self.thread = None
+            raise
+        finally:
+            if encoder:
+                with contextlib.suppress(OSError):
+                    encoder.stdin.close()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    encoder.wait(timeout=5)
+                if encoder.poll() is None:
+                    encoder.kill()
+
+
+RADIO = Radio()
+
+
+class LoginGuard:
+    """Slows password guessing on the sign-in page: a few tries per address,
+    then a pause, and a cap on failures from everywhere at once."""
+    window = 900
+    per_address = 5
+    overall = 50
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.failures = {}
+
+    def blocked(self, address):
+        now = time.monotonic()
+        with self.lock:
+            for key in list(self.failures):
+                self.failures[key] = [t for t in self.failures[key] if now - t < self.window]
+                if not self.failures[key]:
+                    del self.failures[key]
+            return (len(self.failures.get(address, ())) >= self.per_address or
+                    sum(map(len, self.failures.values())) >= self.overall)
+
+    def failed(self, address):
+        with self.lock:
+            self.failures.setdefault(address, []).append(time.monotonic())
+
+    def succeeded(self, address):
+        with self.lock:
+            self.failures.pop(address, None)
+
+
+SESSION_COOKIE = 'pianobar_session'
+
+
 class Session:
     def __init__(self):
         self.condition = threading.Condition()
@@ -2627,6 +2777,7 @@ class Session:
                 continue
             if size != len(packet) - 20 or not 8000 <= rate <= 192000 or not 1 <= channels <= 8:
                 continue
+            RADIO.feed(rate, channels, little, packet[20:])
             with self.audio_lock:
                 self.audio_sequence += 1
                 recent = self.audio_recent
@@ -3097,6 +3248,11 @@ def android_apk_info(path):
         return result
 
 
+def session_token(authorization):
+    """The sign-in cookie's value: derived from the password, so changing the password signs everyone out."""
+    return hmac.new(authorization, b'pianobar web session', hashlib.sha256).hexdigest().encode()
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
@@ -3130,13 +3286,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             self.wfile.write(data)
 
-    def valid_request(self):
+    def authorized(self):
         expected = getattr(self.server, 'authorization', None)
-        if expected is not None and not secrets.compare_digest(
-                self.headers.get('Authorization', '').encode(), expected):
-            self.reply(401, b'{"error":"Sign in to pianobar."}', headers={
-                'WWW-Authenticate': 'Basic realm="pianobar", charset="UTF-8"'})
-            return False
+        if expected is None:
+            return True
+        if secrets.compare_digest(self.headers.get('Authorization', '').encode(), expected):
+            return True
+        for part in self.headers.get('Cookie', '').split(';'):
+            name, _, value = part.strip().partition('=')
+            if name == SESSION_COOKIE:
+                return secrets.compare_digest(value.encode(), session_token(expected))
+        return False
+
+    def valid_request(self, auth=True):
         host = self.headers.get("Host", "")
         allowed = {f"localhost:{self.server.server_port}", f"127.0.0.1:{self.server.server_port}"}
         bind_host = getattr(self.server, 'bind_host', '127.0.0.1')
@@ -3161,18 +3323,138 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # Custom Tabs (and links from other sites) may open the main document
         # cross-site. Permit that navigation, but never cross-site API requests,
         # embedded frames, or mutations. Authentication and Host checks still apply.
-        navigation = (self.command == 'GET' and urlsplit(self.path).path == '/' and
+        path = urlsplit(self.path).path
+        navigation = (self.command == 'GET' and path in ('/', '/radio') and
                       self.headers.get('Sec-Fetch-Mode') == 'navigate' and
                       self.headers.get('Sec-Fetch-Dest') == 'document')
         if self.headers.get("Sec-Fetch-Site") == "cross-site" and not navigation:
             self.reply(403, b'{"error":"Cross-site requests are not allowed."}')
             return False
+        if auth and not self.authorized():
+            if 'Sec-Fetch-Mode' in self.headers:
+                # A browser: its own sign-in page instead of a password dialog.
+                if navigation and path == '/':
+                    self.reply(401, (self.server.assets / 'login.html').read_bytes(), 'text/html; charset=utf-8')
+                else:
+                    self.reply(401, b'{"error":"Sign in to pianobar."}')
+            else:
+                # Apps and scripts send HTTP Basic auth.
+                self.reply(401, b'{"error":"Sign in to pianobar."}', headers={
+                    'WWW-Authenticate': 'Basic realm="pianobar", charset="UTF-8"'})
+            return False
         return True
 
-    def do_GET(self):
-        if not self.valid_request():
+    def secure(self):
+        # Cloudflare (and most HTTPS proxies) say when the visitor used HTTPS.
+        return self.headers.get('X-Forwarded-Proto', '').lower() == 'https'
+
+    def login(self, message):
+        """Signs a browser in with the web password: a session cookie, good until the password changes."""
+        expected = getattr(self.server, 'authorization', None)
+        if set(message) != {'password'} or not isinstance(message['password'], str) or len(message['password']) > 450:
+            raise ValueError('Enter the web password.')
+        guard = self.server.login_guard
+        address = self.headers.get('CF-Connecting-IP') or self.client_address[0]
+        if guard.blocked(address):
+            self.reply(429, b'{"error":"Too many tries. Wait a few minutes and try again."}')
             return
+        attempt = b'Basic ' + base64.b64encode(('pianobar:' + message['password']).encode())
+        if expected is not None and not secrets.compare_digest(attempt, expected):
+            guard.failed(address)
+            time.sleep(1)
+            self.reply(401, b'{"error":"That password is not right."}')
+            return
+        guard.succeeded(address)
+        cookie = (f'{SESSION_COOKIE}={session_token(expected).decode() if expected else ""}; Path=/; HttpOnly; '
+                  f'SameSite=Strict; Max-Age={180 * 86400}' + ('; Secure' if self.secure() else ''))
+        self.reply(200, b'{"ok":true}', headers={'Set-Cookie': cookie})
+
+    def radio_state(self):
+        session = self.server.session
+        with session.condition:
+            song = dict(session.state)
+            stopped = bool(session.exited or session.setup_required or session.proc is None)
+        live = not stopped and song.get('output') in ('browser', 'both') and bool(song.get('title'))
+        result = {'live': live, 'listeners': RADIO.count(), 'full': RADIO.count() >= RADIO.limit}
+        if live:
+            metadata = session.metadata.current(song)
+            cover = ''
+            # The same choice the player page makes: cached art, then Pandora's, then MusicBrainz's.
+            for candidate in (song.get('cachedCover'), None if song.get('offline') else song.get('cover'), metadata.get('cover')):
+                if isinstance(candidate, str) and re.fullmatch(r'/api/artwork/[0-9a-f]{64}', candidate):
+                    cover = '/radio/cover/' + candidate.rsplit('/', 1)[-1]
+                    break
+                if isinstance(candidate, str) and re.match(r'https://', candidate):
+                    cover = candidate
+                    break
+            result.update({k: song.get(k) for k in ('title', 'artist', 'album', 'paused', 'elapsed', 'duration')}, cover=cover)
+        return result
+
+    def radio_stream(self):
+        try:
+            joined = RADIO.join()
+        except RuntimeError as error:
+            self.reply(503, json.dumps({'error': str(error)}).encode())
+            return
+        if joined is None:
+            self.reply(503, b'{"error":"The radio is full right now. Try again soon."}')
+            return
+        listener, backlog = joined
+        try:
+            self.send_response(200)
+            self.send_header('Content-Type', 'audio/mpeg')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Accel-Buffering', 'no')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.end_headers()
+            self.connection.settimeout(15)
+            for chunk in backlog:
+                self.wfile.write(chunk)
+            while not self.server.session.exited:
+                try:
+                    self.wfile.write(listener.get(timeout=10))
+                except queue.Empty:
+                    break  # The encoder stopped.
+        except (OSError, TimeoutError):
+            pass
+        finally:
+            RADIO.leave(listener)
+
+    public_files = {'/radio': ('radio.html', 'text/html; charset=utf-8'),
+                    '/radio.js': ('radio.js', 'text/javascript; charset=utf-8'),
+                    '/login.js': ('login.js', 'text/javascript; charset=utf-8'),
+                    '/public.css': ('public.css', 'text/css; charset=utf-8'),
+                    '/favicon.svg': ('favicon.svg', 'image/svg+xml')}
+
+    def do_GET(self):
         parsed = urlsplit(self.path)
+        # The radio and the sign-in page's files are public; nothing there can change the player.
+        public = parsed.path in self.public_files or parsed.path in ('/api/radio', '/radio/stream') or (
+            parsed.path.startswith('/radio/cover/'))
+        if not self.valid_request(auth=not public):
+            return
+        if parsed.path in self.public_files:
+            name, mime = self.public_files[parsed.path]
+            self.reply(200, (self.server.assets / name).read_bytes(), mime)
+            return
+        if parsed.path == '/api/radio':
+            self.reply(200, json.dumps(self.radio_state()).encode())
+            return
+        if parsed.path == '/radio/stream':
+            self.radio_stream()
+            return
+        if parsed.path.startswith('/radio/cover/'):
+            # Only the cover of the song playing now.
+            image_id = parsed.path.removeprefix('/radio/cover/')
+            if '/radio/cover/' + image_id != self.radio_state().get('cover'):
+                self.reply(404, b'{"error":"Artwork is unavailable."}')
+                return
+            try:
+                data, mime = self.server.session.artwork(image_id)
+                self.reply(200, data, mime, headers={'Cache-Control': 'public, max-age=3600'})
+            except (OSError, ValueError):
+                self.reply(404, b'{"error":"Artwork is unavailable."}')
+            return
         if parsed.path.startswith('/api/download/'):
             try:
                 with self.server.session.download(parsed.path.removeprefix('/api/download/')) as (audio, mime, name):
@@ -3377,7 +3659,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         files = {"/": ("index.html", "text/html; charset=utf-8"),
                  "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                  "/style.css": ("style.css", "text/css; charset=utf-8"),
-                 "/favicon.svg": ("favicon.svg", "image/svg+xml"),
                  "/widget": ("widget.html", "text/html; charset=utf-8"),
                  "/widget.html": ("widget.html", "text/html; charset=utf-8"),
                  "/widget.js": ("widget.js", "text/javascript; charset=utf-8")}
@@ -3390,13 +3671,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         playlist_paths = ('/api/playlists/save', '/api/playlists/add', '/api/playlists/delete', '/api/playlists/play',
                           '/api/playlists/stop', '/api/dj/playlist')
-        if self.path not in ("/api/command", "/api/settings", "/api/dj", '/mcp', "/api/dj/announce", "/api/dj/pick", "/api/dj/control", "/api/dj/introduce", "/api/voice", '/api/clients/register',
+        if self.path not in ("/api/command", "/api/settings", '/api/login', '/api/logout', "/api/dj", '/mcp', "/api/dj/announce", "/api/dj/pick", "/api/dj/control", "/api/dj/introduce", "/api/voice", '/api/clients/register',
                              *playlist_paths,
                              '/api/clients/heartbeat', '/api/clients/update',
                              '/api/clients/route', '/api/clients/unregister'):
             self.reply(404, b"Not found", "text/plain")
             return
-        if not self.valid_request():
+        if not self.valid_request(auth=self.path not in ('/api/login', '/api/logout')):
+            return
+        if self.path == '/api/logout':
+            self.reply(200, b'{"ok":true}', headers={'Set-Cookie': f'{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'})
             return
         if self.headers.get_content_type() != "application/json":
             self.reply(415, b'{"error":"Send commands as application/json."}')
@@ -3417,6 +3701,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             if not isinstance(message, dict):
                 raise ValueError("Invalid request.")
+            if self.path == '/api/login':
+                self.login(message)
+                return
             if self.path in ('/api/dj', '/api/dj/announce', '/api/dj/pick', '/api/dj/control', '/api/dj/introduce', '/api/voice'):
                 dj = self.server.session.dj
                 if self.path == '/api/voice':
@@ -3555,6 +3842,7 @@ def main():
     server.bind_host = args.listen
     server.authorization = b'Basic ' + base64.b64encode(('pianobar:' + password).encode()) if password else None
     server.session, server.assets = session, assets
+    server.login_guard = LoginGuard()
     server.configuration = configuration
     browser_host = 'localhost' if bind_address.is_unspecified or args.listen == '127.0.0.1' else (
         '[' + args.listen + ']' if bind_address.version == 6 else args.listen)

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#172b2b">
+  <title>pianobar radio</title>
+  <link rel="icon" href="/favicon.svg">
+  <link rel="stylesheet" href="/public.css">
+  <script src="/radio.js" defer></script>
+</head>
+<body>
+  <main class="card">
+    <span class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>pianobar<span class="brand-dot">.</span></span></span>
+    <p id="status" class="eyebrow live">Connecting…</p>
+    <div class="cover">
+      <span class="cover-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <img id="cover" alt="" hidden>
+    </div>
+    <div class="song">
+      <span id="title" class="title"></span>
+      <span id="artist" class="artist"></span>
+    </div>
+    <div class="progress" aria-hidden="true"><span id="progress"></span></div>
+    <button id="play" class="button" type="button">▶ Listen</button>
+    <label class="volume">Volume<input id="volume" type="range" min="0" max="1" step="0.01" value="1"></label>
+    <p id="error" class="error" role="alert"></p>
+    <p class="footnote">Listen only. <a href="/">Sign in</a> to change what's playing.</p>
+  </main>
+  <audio id="audio" preload="none"></audio>
+</body>
+</html>

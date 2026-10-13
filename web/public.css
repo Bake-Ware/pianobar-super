@@ -1,0 +1,261 @@
+/* The public pages: the sign-in page and the listen-only radio. */
+:root {
+	color-scheme:light dark;
+	--paper:#f5f4ef;
+	--card:#fff;
+	--ink:#172b2b;
+	--muted:#6f7772;
+	--orange:#e68b55;
+	--line:#ddded5;
+	--bad:#b3261e;
+}
+@media (prefers-color-scheme:dark) {
+	:root {
+		--paper:#0f1c1c;
+		--card:#172b2b;
+		--ink:#eef0ea;
+		--muted:#a4ada7;
+		--line:#2c4343;
+		--bad:#ffb4ab;
+	}
+}
+* {
+	box-sizing:border-box;
+}
+body {
+	margin:0;
+	min-height:100vh;
+	min-height:100dvh;
+	display:grid;
+	place-items:center;
+	padding:24px 16px;
+	background:var(--paper);
+	color:var(--ink);
+	font-family:Inter,"Helvetica Neue",Arial,sans-serif;
+	font-size:15px;
+}
+button,input {
+	font:inherit;
+}
+a {
+	color:inherit;
+}
+button:focus-visible,a:focus-visible,input:focus-visible {
+	outline:3px solid var(--orange);
+	outline-offset:3px;
+}
+.card {
+	width:100%;
+	max-width:380px;
+	background:var(--card);
+	border:1px solid var(--line);
+	border-radius:18px;
+	padding:28px 24px;
+	display:flex;
+	flex-direction:column;
+	gap:16px;
+}
+.brand {
+	display:flex;
+	align-items:center;
+	gap:10px;
+	font-size:26px;
+	font-weight:750;
+	letter-spacing:-1.2px;
+	text-decoration:none;
+}
+.brand-mark {
+	display:flex;
+	align-items:center;
+	gap:3px;
+	height:28px;
+}
+.brand-mark i {
+	display:block;
+	width:4px;
+	height:19px;
+	background:var(--orange);
+}
+.brand-mark i:nth-child(2) { height:28px; }
+.brand-mark i:nth-child(3) { height:13px; }
+.brand-mark i:nth-child(4) { height:23px; }
+.brand-dot {
+	color:var(--orange);
+}
+.eyebrow {
+	margin:0;
+	font-size:11px;
+	letter-spacing:1.8px;
+	font-weight:700;
+	color:var(--muted);
+	text-transform:uppercase;
+}
+h1 {
+	margin:0;
+	font-size:22px;
+	letter-spacing:-.4px;
+}
+p {
+	margin:0;
+	color:var(--muted);
+	line-height:1.45;
+}
+label {
+	display:flex;
+	flex-direction:column;
+	gap:6px;
+	font-weight:600;
+	font-size:13px;
+}
+input {
+	width:100%;
+	padding:11px 12px;
+	border:1px solid var(--line);
+	border-radius:10px;
+	background:var(--paper);
+	color:var(--ink);
+}
+.button {
+	display:flex;
+	align-items:center;
+	justify-content:center;
+	gap:8px;
+	width:100%;
+	min-height:46px;
+	padding:10px 16px;
+	border-radius:999px;
+	border:1px solid var(--ink);
+	background:var(--ink);
+	color:var(--paper);
+	font-weight:700;
+	text-decoration:none;
+	cursor:pointer;
+}
+.button.secondary {
+	background:transparent;
+	color:var(--ink);
+	border-color:var(--line);
+}
+.button:disabled {
+	opacity:.5;
+	cursor:default;
+}
+.divider {
+	display:flex;
+	align-items:center;
+	gap:10px;
+	color:var(--muted);
+	font-size:12px;
+}
+.divider::before,.divider::after {
+	content:"";
+	flex:1;
+	border-top:1px solid var(--line);
+}
+.error {
+	color:var(--bad);
+	font-size:13px;
+	min-height:1em;
+}
+.error:empty {
+	display:none;
+}
+
+/* Radio */
+.cover {
+	position:relative;
+	aspect-ratio:1;
+	width:100%;
+	border-radius:12px;
+	background:var(--paper);
+	overflow:hidden;
+	display:grid;
+	place-items:center;
+}
+.cover img {
+	position:absolute;
+	inset:0;
+	width:100%;
+	height:100%;
+	object-fit:cover;
+}
+.cover-mark {
+	display:flex;
+	align-items:center;
+	gap:8px;
+	height:72px;
+	opacity:.35;
+}
+.cover-mark i {
+	width:10px;
+	height:50px;
+	background:var(--orange);
+}
+.cover-mark i:nth-child(2) { height:72px; }
+.cover-mark i:nth-child(3) { height:34px; }
+.cover-mark i:nth-child(4) { height:60px; }
+.song {
+	display:flex;
+	flex-direction:column;
+	gap:4px;
+	min-width:0;
+}
+.title {
+	font-size:20px;
+	font-weight:750;
+	letter-spacing:-.3px;
+	overflow-wrap:anywhere;
+}
+.artist {
+	color:var(--muted);
+	overflow-wrap:anywhere;
+}
+.live {
+	display:inline-flex;
+	align-items:center;
+	gap:6px;
+}
+.live::before {
+	content:"";
+	width:8px;
+	height:8px;
+	border-radius:50%;
+	background:var(--muted);
+}
+.live.on::before {
+	background:#f12b36;
+}
+.progress {
+	height:4px;
+	border-radius:2px;
+	background:var(--line);
+	overflow:hidden;
+}
+.progress span {
+	display:block;
+	height:100%;
+	width:0;
+	background:var(--orange);
+}
+.volume {
+	flex-direction:row;
+	align-items:center;
+	gap:10px;
+	font-weight:500;
+	color:var(--muted);
+}
+.volume input {
+	padding:0;
+	accent-color:var(--orange);
+	background:none;
+	border:0;
+}
+.footnote {
+	font-size:12px;
+	text-align:center;
+}
+.stack {
+	display:flex;
+	flex-direction:column;
+	gap:12px;
+}

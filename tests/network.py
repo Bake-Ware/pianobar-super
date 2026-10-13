@@ -88,6 +88,72 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
         request('/api/state', headers=navigation, expected=403)
         request('/', headers={**navigation, 'Sec-Fetch-Dest': 'iframe'}, expected=403)
         request('/api/clients/register', {'name': 'Cross-site'}, headers=navigation, expected=403)
+        # A browser that isn't signed in gets the sign-in page (no password dialog) with the radio link.
+        same_site = {'Sec-Fetch-Site': 'same-origin', 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document'}
+        try:
+            urllib.request.urlopen(urllib.request.Request(origin + '/', headers=same_site), timeout=5)
+            raise AssertionError('Signed out page was served')
+        except urllib.error.HTTPError as error:
+            assert error.code == 401 and 'WWW-Authenticate' not in error.headers
+            page = error.read()
+            assert b'href="/radio"' in page and b'/login.js' in page
+        try:
+            urllib.request.urlopen(urllib.request.Request(origin + '/api/state', headers={'Sec-Fetch-Mode': 'cors'}), timeout=5)
+        except urllib.error.HTTPError as error:
+            assert error.code == 401 and 'WWW-Authenticate' not in error.headers
+        try:
+            urllib.request.urlopen(origin + '/api/state', timeout=5)
+        except urllib.error.HTTPError as error:
+            assert error.code == 401 and error.headers['WWW-Authenticate'].startswith('Basic')
+        # Sign in with the password: a session cookie that works like Basic auth.
+        def login(password, headers=None):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(origin + '/api/login', json.dumps({'password': password}).encode(),
+                                            {'Content-Type': 'application/json', **(headers or {})}), timeout=5) as response:
+                    return response.status, response.headers.get('Set-Cookie', '')
+            except urllib.error.HTTPError as error:
+                return error.code, ''
+        assert login('wrong', {'CF-Connecting-IP': '198.51.100.1'})[0] == 401
+        status, cookie = login('test-network-password', {'X-Forwarded-Proto': 'https'})
+        assert status == 200 and 'HttpOnly' in cookie and 'SameSite=Strict' in cookie and 'Secure' in cookie
+        session_cookie = cookie.split(';')[0]
+        assert request('/api/state', authorized=False, headers={'Cookie': session_cookie})['state']['title'] == 'LAN audio'
+        request('/api/state', authorized=False, headers={'Cookie': 'pianobar_session=' + '0' * 64}, expected=401)
+        request('/api/login', {'password': 'test-network-password'}, authorized=False, headers={'Origin': 'https://example.com'}, expected=403)
+        request('/api/login', {'password': 'x', 'extra': 1}, authorized=False, expected=400)
+        # The public pages and radio need no sign-in...
+        for path in ['/radio', '/radio.js', '/login.js', '/public.css', '/favicon.svg']:
+            assert request(path, authorized=False)
+        radio = request('/api/radio', authorized=False)
+        assert radio['live'] and radio['title'] == 'LAN audio' and radio['artist'] == 'Test artist'
+        assert set(radio) == {'live', 'listeners', 'full', 'title', 'artist', 'album', 'paused', 'elapsed', 'duration', 'cover'}
+        assert radio['cover'] == '/radio/cover/' + image_id
+        assert request(radio['cover'], authorized=False) == image
+        request('/radio/cover/' + 'c' * 64, authorized=False, expected=404)
+        mp3 = http.client.HTTPConnection('localhost', port, timeout=10)
+        mp3.request('GET', '/radio/stream')
+        stream_response = mp3.getresponse()
+        assert stream_response.status == 200 and stream_response.headers['Content-Type'] == 'audio/mpeg'
+        encoded = stream_response.read(16384)
+        assert re.search(rb'\xff[\xfa\xfb\xf2\xf3\xe2\xe3]', encoded), encoded[:64]
+        assert request('/api/radio', authorized=False)['listeners'] == 1
+        # ...and it never registers a device.
+        assert all(c['name'] != 'Radio' for c in request('/api/clients')['clients'])
+        mp3.close()
+        # ...but nothing else is public.
+        for path in ['/api/clients', '/api/settings', '/api/library', '/api/dj', '/api/playlists', '/radio/../api/state']:
+            request(path, authorized=False, expected=401 if not path.startswith('/radio/..') else 401)
+        for path, body in [('/api/command', {'action': 'act_songnext'}), ('/api/clients/register', {'name': 'x'}),
+                           ('/api/settings', {}), ('/api/dj/control', {})]:
+            request(path, body, authorized=False, expected=401)
+        # Signing out clears the cookie.
+        with urllib.request.urlopen(urllib.request.Request(origin + '/api/logout', b'', {'Cookie': session_cookie}, method='POST'), timeout=5) as response:
+            assert 'Max-Age=0' in response.headers['Set-Cookie']
+        # Guessing is slowed: a few wrong tries, then a pause even for the right password.
+        for _ in range(4):
+            assert login('wrong', {'CF-Connecting-IP': '198.51.100.1'})[0] == 401
+        assert login('test-network-password', {'CF-Connecting-IP': '198.51.100.1'})[0] == 429
+        assert login('test-network-password', {'CF-Connecting-IP': '198.51.100.2'})[0] == 200
         assert request('/api/artwork/' + image_id) == image
         with urllib.request.urlopen(urllib.request.Request(origin + '/api/artwork/' + image_id,
                                     headers={'Authorization': auth})) as cover_response:

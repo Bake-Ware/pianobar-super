@@ -141,7 +141,7 @@ endif
 	install -d ${DESTDIR}${BINDIR}/
 	install -m755 pianobar pianobar-web ${DESTDIR}${BINDIR}/
 	install -d ${DESTDIR}${PREFIX}/share/pianobar/web/
-	install -m644 web/index.html web/app.js web/style.css web/widget.html web/widget.js web/favicon.svg ${DESTDIR}${PREFIX}/share/pianobar/web/
+	install -m644 web/index.html web/app.js web/style.css web/widget.html web/widget.js web/favicon.svg web/login.html web/login.js web/radio.html web/radio.js web/public.css ${DESTDIR}${PREFIX}/share/pianobar/web/
 	install -d ${DESTDIR}${MANDIR}/man1/
 	install -m644 contrib/pianobar.1 ${DESTDIR}${MANDIR}/man1/
 
@@ -162,6 +162,11 @@ uninstall:
 	${DESTDIR}${PREFIX}/share/pianobar/web/widget.html \
 	${DESTDIR}${PREFIX}/share/pianobar/web/widget.js \
 	${DESTDIR}${PREFIX}/share/pianobar/web/favicon.svg \
+	${DESTDIR}${PREFIX}/share/pianobar/web/login.html \
+	${DESTDIR}${PREFIX}/share/pianobar/web/login.js \
+	${DESTDIR}${PREFIX}/share/pianobar/web/radio.html \
+	${DESTDIR}${PREFIX}/share/pianobar/web/radio.js \
+	${DESTDIR}${PREFIX}/share/pianobar/web/public.css \
 	${DESTDIR}/${MANDIR}/man1/pianobar.1 \
 	${DESTDIR}/${LIBDIR}/libpiano.so.0.0.0 \
 	${DESTDIR}/${LIBDIR}/libpiano.so.0 \
