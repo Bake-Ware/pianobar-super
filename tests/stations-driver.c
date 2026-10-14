@@ -121,6 +121,19 @@ int main (void) {
 	assert (app.nextStation == &second && app.curStation == &first);
 	assert (app.playlist != NULL && app.playlist->head.next == NULL);
 	assert (app.player.doQuit && !app.player.doPause);
+	/* Creating a station needs Pandora: offline or an empty or oversized search changes nothing. */
+	app.nextStation = &first;
+	app.player.doQuit = false;
+	app.offline = true;
+	stationCommand (&app, pair[1], "create_station", "Kid Cudi");
+	assert (app.nextStation == &first && !app.player.doQuit && app.ph.stations == &first);
+	app.offline = false;
+	stationCommand (&app, pair[1], "create_station", "");
+	char longQuery[120];
+	memset (longQuery, 'a', sizeof (longQuery) - 1);
+	longQuery[sizeof (longQuery) - 1] = '\0';
+	stationCommand (&app, pair[1], "create_station", longQuery);
+	assert (app.nextStation == &first && !app.player.doQuit && second.head.next == NULL);
 	/* Python/browser tests use the actual native station-state representation. */
 	puts (json_object_to_json_string_ext (state, JSON_C_TO_STRING_PLAIN));
 	json_object_put (state);

@@ -1614,6 +1614,11 @@ body[data-pinned="true"] #widget-pin {
 .dj-more li.dj-now::before { content: "▶"; color: var(--orange); }
 .dj-more li.dj-done { opacity: .5; }
 .dj-more li.dj-after::before { content: "+"; }
+.dj-log ol { max-height: 320px; overflow-y: auto; }
+.dj-log li { flex-direction: column; gap: 2px; }
+.dj-log li::before { content: none; }
+.dj-log-meta { font-size: 9px; letter-spacing: .6px; text-transform: uppercase; color: #8d9c92; }
+.dj-log q { quotes: "“" "”"; }
 .dj-empty { margin: 2px 0 8px; font-size: 11px; line-height: 1.6; color: #d0d9cc; }
 .dj-form { margin-top: 12px; }
 .dj-form label { display: block; margin-bottom: 6px; font-size: 9px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; color: #becabc; }

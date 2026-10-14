@@ -158,6 +158,52 @@ void BarWebPoll (BarApp_t *app) {
 			} else {
 				BarUiMsg (&app->settings, MSG_ERR, "That station is unavailable.\n");
 			}
+		} else if (strcmp (json_object_get_string (type), "create_station") == 0) {
+			/* Search Pandora, create a station from the best artist (or song) match and tune in. */
+			json_object *kind;
+			const bool song = json_object_object_get_ex (message, "kind", &kind) &&
+					json_object_is_type (kind, json_type_string) &&
+					strcmp (json_object_get_string (kind), "song") == 0;
+			const char *query = json_object_get_string (id);
+			bool created = false;
+			if (!app->offline && !app->doQuit && app->modeRequest == 0 &&
+					query[0] != '\0' && strlen (query) < 100) {
+				PianoReturn_t pRet;
+				CURLcode wRet;
+				PianoRequestDataSearch_t search = {.searchStr = (char *) query};
+				BarUiMsg (&app->settings, MSG_INFO, "Searching... ");
+				if (BarUiPianoCall (app, PIANO_REQUEST_SEARCH, &search, &pRet, &wRet)) {
+					PianoSearchResult_t *found = &search.searchResult;
+					const char *musicId = song && found->songs != NULL ? found->songs->musicId :
+							found->artists != NULL ? found->artists->musicId :
+							found->songs != NULL ? found->songs->musicId : NULL;
+					if (musicId != NULL) {
+						PianoRequestDataCreateStation_t create = {.token = strdup (musicId),
+								.type = PIANO_MUSICTYPE_INVALID};
+						BarUiMsg (&app->settings, MSG_INFO, "Creating station... ");
+						if (create.token != NULL &&
+								BarUiPianoCall (app, PIANO_REQUEST_CREATE_STATION, &create, &pRet, &wRet)) {
+							/* The new station is appended to the list. */
+							PianoStation_t *station = app->ph.stations;
+							while (station != NULL && PianoListNextP (station) != NULL) {
+								station = PianoListNextP (station);
+							}
+							if (station != NULL) {
+								BarUiSwitchStation (app, station);
+								BarWebState (app);
+								created = true;
+							}
+						}
+						free (create.token);
+					} else {
+						BarUiMsg (&app->settings, MSG_INFO, "Nothing found...\n");
+					}
+					PianoDestroySearchResult (found);
+				}
+			}
+			if (!created) {
+				BarUiMsg (&app->settings, MSG_ERR, "Could not create that station.\n");
+			}
 		} else if (strcmp (json_object_get_string (type), "queue_saved") == 0) {
 			json_object *current;
 			const char *name = app->playlist == NULL ? NULL : strrchr (app->playlist->audioUrl, '/');

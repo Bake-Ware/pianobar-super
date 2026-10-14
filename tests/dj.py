@@ -195,7 +195,7 @@ class DJTests(unittest.TestCase):
         # Record spoken lines; test_spoken_line_reaches_player covers the real pipeline.
         self.spoken = []
         self.real_say = self.session.dj.say
-        def say(text, song_key=None):
+        def say(text, song_key=None, kind='intro'):
             self.spoken.append(dict(text=text, songKey=song_key))
             return dict(id=len(self.spoken), status='preparing', text=text, songKey=song_key, error='')
         self.session.dj.say = say
@@ -326,6 +326,10 @@ class DJTests(unittest.TestCase):
         self.assertEqual(self.calls[-1][1], dict(text='Coming at ya with some London punk!', voice='radio'))
         state = self.request('/api/state')
         self.assertEqual((state['djVoice']['status'], state['djVoice']['songKey']), ('on_air', key))
+        # On air, the line joins the log with its song.
+        line = self.request('/api/dj/log')['lines'][0]
+        self.assertEqual((line['text'], line['kind'], line['title'], line['artist']),
+                         ('Coming at ya with some London punk!', 'announce', 'Dat New New', 'Kid Cudi'))
         self.session.dj.on_player_voice(dict(djVoice=0, djVoiceDone=voice['id']))
         self.assertEqual(self.request('/api/state')['djVoice']['status'], 'done')
         # A held line (music pauses while the DJ speaks) is the player's job too.
@@ -346,6 +350,8 @@ class DJTests(unittest.TestCase):
         while self.session.dj.voice_public()['status'] == 'preparing' and time.monotonic() < deadline:
             time.sleep(.01)
         self.assertEqual(self.session.dj.voice_public()['status'], 'idle')
+        # A dropped line never aired, so it is not in the log.
+        self.assertNotIn('About the old song', [line['text'] for line in self.request('/api/dj/log')['lines']])
         player.settimeout(.2)
         with self.assertRaises(TimeoutError):
             player.recv(4096)
@@ -859,6 +865,9 @@ class DJTests(unittest.TestCase):
     def test_intro_history_and_listener_activity_survive_a_restart(self):
         from unittest.mock import Mock
         first = self.request('/api/dj', {})['text']
+        # A written line is remembered only once it goes on air.
+        self.assertEqual(self.session.dj.memory.snapshot()['recentIntros'], [])
+        self.session.dj.memory.add_intro(first, self.session.state)
         self.session.status, self.session.master = Mock(), Mock()
         self.session.state['actions'] = [dict(id='act_songnext', enabled=True, key='n'), dict(id='act_songlove', enabled=True, key='+'),
                                          dict(id='act_songpause', enabled=True, key='S')]
@@ -882,7 +891,7 @@ class DJTests(unittest.TestCase):
         memory = restarted.dj.memory.snapshot()
         self.assertEqual(memory['recentIntros'], [first])
         self.assertEqual([(item['kind'], item.get('text'), item['title']) for item in memory['listenerActivity']],
-                         [('request', 'Talking Heads', 'Dat New New'), ('skip', None, 'Dat New New'), ('love', None, 'Dat New New')])
+                         [('request', 'Talking Heads', 'Dat New New'), ('skip', None, 'Dat New New'), ('pause', None, 'Dat New New'), ('love', None, 'Dat New New')])
         self.session.dj.memory = restarted.dj.memory
         self.session.dj.generate({}, cache=False)
         sent = json.loads(self.chats()[-1]['messages'][1]['content'])
@@ -896,6 +905,139 @@ class DJTests(unittest.TestCase):
             restarted.dj.memory.add_intro(f'Intro number {number}', dict(title='T', artist='A'))
         intros = host['DJMemory']().snapshot()['recentIntros']
         self.assertEqual((len(intros), intros[0], intros[-1]), (20, 'Intro number 24', 'Intro number 5'))
+        # The on-air log keeps more, newest first, with the song each line was about.
+        log = host['DJMemory']().log()
+        self.assertEqual((len(log), log[0]['text'], log[0]['title'], log[0]['kind'], log[-1]['text']),
+                         (26, 'Intro number 24', 'T', 'intro', first))
+
+    def test_listener_station_picks_pauses_and_reconnects_are_remembered(self):
+        from unittest.mock import Mock
+        self.session.status, self.session.master = Mock(), Mock()
+        self.session.state.update(offline=False, stationId='s1', stations=[dict(id='s1', name='Cudi Radio'), dict(id='s2', name='Smooth Jazz Radio')],
+                                  actions=[dict(id=name, enabled=True, key='x') for name in ('act_stationchange', 'act_songpausetoggle', 'act_offline')])
+        with patch('os.write', return_value=1):
+            self.request('/api/command', {'selectStation': 's2'})
+            self.session.pending = False
+            self.request('/api/command', {'action': 'act_songpausetoggle'})
+            self.session.pending = False
+            self.session.state['paused'] = True
+            self.request('/api/command', {'action': 'act_songpausetoggle'})
+            self.session.pending = False
+            self.session.state.update(paused=False, offline=True)
+            self.request('/api/command', {'action': 'act_offline'})
+            self.session.pending = False
+            # The DJ's own station changes are not the listener's.
+            self.session.state['offline'] = False
+            self.session.command({'selectStation': 's1'})
+        # Listeners can create stations too; the search is checked first.
+        self.session.pending = False
+        with patch('os.write', return_value=1):
+            for bad in ({'query': ''}, {'query': 'x' * 91}, {'query': 'Daft Punk', 'kind': 'album'}, 'Daft Punk', {'query': 'a\nb'}):
+                self.request('/api/command', {'createStation': bad}, expected=400)
+            self.request('/api/command', {'createStation': {'query': 'Daft Punk'}})
+            self.assertIn(dict(type='create_station', id='Daft Punk', kind='artist'), [json.loads(call.args[0]) for call in self.session.status.send.call_args_list])
+            self.session.pending = False
+        activity = self.session.dj.memory.snapshot()['listenerActivity']
+        self.assertEqual((activity[0]['kind'], activity[0]['seed']), ('station_create', 'Daft Punk'))
+        activity = activity[1:]
+        # A quick pause and resume is one moment.
+        self.assertEqual([item['kind'] for item in activity], ['reconnect', 'resume', 'station_pick'])
+        self.assertEqual(activity[2]['station'], 'Smooth Jazz Radio')
+
+    def test_caller_can_change_the_station_reconnect_or_hear_the_choices(self):
+        from unittest.mock import Mock
+        import time
+        dj = self.session.dj
+        self.session.status, self.session.master = Mock(), Mock()
+        stations = [dict(id='s1', name='Cudi Radio'), dict(id='s2', name='Smooth Jazz Radio')]
+        self.session.state.update(offline=False, stationId='s1', stations=stations,
+                                  actions=[dict(id=name, enabled=True, key='x') for name in ('act_stationchange', 'act_offline')])
+        def sent(kind):
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline:
+                packets = [json.loads(call.args[0]) for call in self.session.status.send.call_args_list]
+                found = [packet for packet in packets if packet.get('type') == kind]
+                if found:
+                    return found
+                time.sleep(.05)
+            return []
+        tool = lambda function, **arguments: {'choices': [{'message': {'role': 'assistant', 'content': None, 'tool_calls': [
+            {'id': 't1', 'type': 'function', 'function': {'name': function, 'arguments': json.dumps(arguments)}}]}}]}
+        self.script += [tool('play_station', name='jazz'), {'message': {'content': 'You got it, Sam: smooth jazz, coming right up.'}}]
+        result = dj.call_in('Can you put on some jazz?', 'Sam')
+        self.assertEqual(result['change'], dict(type='station', name='Smooth Jazz Radio', reconnect=False))
+        self.assertEqual(self.spoken[-1]['text'], 'You got it, Sam: smooth jazz, coming right up.')
+        chats = self.chats()
+        self.assertEqual([item['function']['name'] for item in chats[-2]['tools']], ['play_station', 'create_station', 'play_saved_music', 'reconnect'])
+        self.assertEqual(json.loads(chats[-2]['messages'][1]['content'])['stations'], ['Cudi Radio', 'Smooth Jazz Radio'])
+        self.assertIn('switching to Smooth Jazz Radio', chats[-1]['messages'][-1]['content'])
+        self.assertEqual(chats[-1]['tool_choice'], 'none')
+        self.assertEqual([packet['id'] for packet in sent('select_station')], ['s2'])
+        deadline = time.monotonic() + 3
+        while not any(item['kind'] == 'call_change' for item in dj.memory.activity) and time.monotonic() < deadline:
+            time.sleep(.05)
+        self.assertEqual(dj.memory.activity[-1]['done'], 'Switched to Smooth Jazz Radio')
+
+        # Offline, the DJ reconnects first and then switches, using the stations it saw online.
+        self.session.status.reset_mock()
+        self.session.pending = False
+        dj.known_stations = stations
+        self.session.state.update(offline=True, stations=[], stationId=None)
+        self.script += [tool('play_station', name='cudi'), {'message': {'content': 'Back to Pandora for some Cudi Radio!'}}]
+        with patch('os.write', return_value=1) as write:
+            result = dj.call_in('Get back online and play Cudi Radio', 'Sam')
+            self.assertEqual(result['change'], dict(type='station', name='Cudi Radio', reconnect=True))
+            deadline = time.monotonic() + 5
+            while not write.called and time.monotonic() < deadline:
+                time.sleep(.05)
+            self.assertTrue(write.called)
+            self.assertEqual(sent('select_station'), [])
+            # Pandora comes back.
+            self.session.state.update(offline=False, stations=stations)
+            self.session.pending = False
+            self.assertEqual([packet['id'] for packet in sent('select_station')], ['s1'])
+
+        # A set from saved songs, chosen by the DJ and played once the answer has aired.
+        self.session.status.reset_mock()
+        self.session.pending = False
+        clash = 'b' * 64 + '.mka'
+        self.session.library = lambda: [dict(id=clash, artist='The Clash', title='London Calling', album='London Calling')]
+        self.script += [tool('play_saved_music', theme='punk'), {'message': {'content': 'Punk it is, coming up!'}}]
+        result = dj.call_in('Play some punk from my saved stuff', 'Sam')
+        self.assertEqual(result['change'], dict(type='set', theme='punk'))
+        self.assertEqual([packet['id'] for packet in sent('play_saved')], [clash])
+
+        # A new station from an artist: the player searches Pandora, creates it and tunes in.
+        self.session.status.reset_mock()
+        self.session.pending = False
+        self.session.state.update(stationId='s1', station='Cudi Radio')
+        self.script += [tool('create_station', seed='Daft  Punk'), {'message': {'content': 'A brand new Daft Punk station, just for you.'}}]
+        result = dj.call_in('Make me a Daft Punk station', 'Sam')
+        self.assertEqual(result['change'], dict(type='create', seed='Daft Punk', kind='artist', reconnect=False))
+        self.assertEqual([(packet['id'], packet['kind']) for packet in sent('create_station')], [('Daft Punk', 'artist')])
+        self.session.state.update(stationId='s3', station='Daft Punk Radio', stations=stations + [dict(id='s3', name='Daft Punk Radio')])
+        self.session.pending = False
+        deadline = time.monotonic() + 5
+        while dj.memory.activity[-1].get('done', '').startswith('Created') is False and time.monotonic() < deadline:
+            time.sleep(.05)
+        self.assertEqual(dj.memory.activity[-1]['done'], 'Created Daft Punk Radio from Daft Punk')
+        # Asking to create one that already exists plays it instead.
+        self.session.status.reset_mock()
+        self.session.state['stations'] = stations
+        self.script += [tool('create_station', seed='smooth jazz', kind='artist'), {'message': {'content': 'Smooth jazz, we have that one.'}}]
+        self.assertEqual(dj.call_in('Create a smooth jazz station', 'Sam')['change'], dict(type='station', name='Smooth Jazz Radio', reconnect=False))
+        self.assertEqual([packet['id'] for packet in sent('select_station')], ['s2'])
+        self.session.pending = False
+
+        # A station that doesn't exist: the DJ hears the choices and nothing changes.
+        self.session.status.reset_mock()
+        self.session.pending = False
+        self.script += [tool('play_station', name='polka'), {'message': {'content': 'No polka here, but Cudi Radio keeps rolling.'}}]
+        result = dj.call_in('Polka please', 'Sam')
+        self.assertNotIn('change', result)
+        self.assertIn('No station by that name; create_station can make one. Stations: Cudi Radio, Smooth Jazz Radio', self.chats()[-1]['messages'][-1]['content'])
+        time.sleep(.3)
+        self.assertEqual(sent('select_station'), [])
 
     def test_intro_prompt_pushes_variety_and_sparing_names(self):
         dj = self.session.dj
@@ -912,7 +1054,8 @@ class DJTests(unittest.TestCase):
         self.assertGreater(len(systems), 1)
         sent = json.loads(self.chats()[-1]['messages'][1]['content'])
         self.assertIn('hey bake here', sent['avoidOpenings'])
-        self.assertEqual(sent['recentIntros'][:2], ['Hey Bake, here comes a classic from Kid Cudi.', 'Coming at ya with Kid Cudi and Dat New New.'])
+        # Lines the DJ wrote but never said are not in its memory.
+        self.assertEqual(set(sent['recentIntros']), {'Hey Bake, here comes a classic from Kid Cudi.'})
         # Without a recent mention, names are allowed now and then but not every time.
         dj.memory.intros = []
         allowed = set()

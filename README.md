@@ -276,10 +276,12 @@ authentication, so an agent can call into the station:
 | Tool | Behavior |
 | --- | --- |
 | `now_playing` | Current and upcoming song, and whether the DJ is talking |
-| `call_in` | `{message, caller?}`: the DJ answers on air when someone is listening; the call is remembered for later intros |
+| `call_in` | `{message, caller?}`: the DJ answers on air when someone is listening; the call is remembered for later intros. Ask for different music and, once its answer has played, the DJ can switch to one of your Pandora stations, create a new one from an artist or song, play a set of saved songs, or reconnect to Pandora first |
 | `request_song` | `{query, caller?}`: queues a matching saved song when the station plays saved music, otherwise notes the request |
 | `announce` | `{text}`: the DJ voice reads a line word for word |
-| `dj_memory` | The DJ's recent lines and the listener's recent activity |
+| `dj_memory` | The DJ's recent on-air lines and the listener's recent activity (skips, loves, station picks, pauses, reconnects, calls) |
+
+The booth's **On-air log** (`GET /api/dj/log`) lists the last 50 lines the DJ actually said, with the song and time. Lines written but never played are left out.
 
 ## Android and mobile
 

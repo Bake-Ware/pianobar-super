@@ -61,6 +61,9 @@
             <ol id="dj-queue" hidden></ol><p id="dj-lineup-empty" class="dj-empty"></p>
             <form id="dj-theme-form" class="dj-form"><label for="dj-theme">Station theme</label><div class="dj-field"><input id="dj-theme" maxlength="450" placeholder="A varied mix from my saved music" autocomplete="off"><button class="dj-button" type="submit">Set</button></div></form>
           </details>
+          <details id="dj-log" class="dj-more dj-log"><summary><span>On-air log</span></summary>
+            <ol id="dj-log-list" hidden></ol><p id="dj-log-empty" class="dj-empty" role="status">Nothing on air yet.</p>
+          </details>
         </section>
         <details id="audio-output-panel" class="audio-output"><summary>Audio output <span id="audio-status" role="status"></span></summary><div class="audio-output-body"><label for="audio-output">Play on</label><select id="audio-output"><option value="browser">Browser</option><option value="host">Host speakers</option><option value="both">Both</option></select><label for="browser-name">This browser</label><input id="browser-name" maxlength="80" placeholder="Name this browser" aria-label="This browser name"></div></details>
         </div>

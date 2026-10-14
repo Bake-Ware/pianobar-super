@@ -976,7 +976,37 @@ function renderDJ(data) {
   $('dj-lineup-empty').textContent = station.enabled ? 'The DJ is lining up songs from your library…' :
     'Turn on “Picks music” and the DJ builds sets from your saved songs.';
   $('dj-theme-form').hidden = !llm;
+  // A new line on air: refresh the log if it is open.
+  if (voice.status === 'on_air' && voice.id !== djLogVoice) {
+    djLogVoice = voice.id;
+    if ($('dj-log').open) loadDJLog();
+  }
 }
+// The on-air log: every line the DJ actually said, newest first.
+let djLogVoice = null;
+const djLogKinds = {call: 'Call-in', announce: 'Read on air'};
+async function loadDJLog() {
+  let lines;
+  try { lines = (await djJSON('/api/dj/log')).lines || []; }
+  catch (error) { $('dj-log-empty').textContent = error.message; $('dj-log-empty').hidden = false; return; }
+  $('dj-log-list').replaceChildren(...lines.map(line => {
+    const row = document.createElement('li');
+    const meta = document.createElement('span');
+    meta.className = 'dj-log-meta';
+    const when = line.at ? new Date(line.at * 1000) : null;
+    meta.textContent = [when && (when.toDateString() === new Date().toDateString() ? '' : when.toLocaleDateString([], {month: 'short', day: 'numeric'}) + ' ') +
+                          when.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'}),
+                        djLogKinds[line.kind], line.title && djSong(line)].filter(Boolean).join(' · ');
+    const text = document.createElement('q');
+    text.textContent = spokenText(line.text);
+    row.append(meta, text);
+    return row;
+  }));
+  $('dj-log-list').hidden = !lines.length;
+  $('dj-log-empty').hidden = !!lines.length;
+  $('dj-log-empty').textContent = 'Nothing on air yet.';
+}
+$('dj-log').addEventListener('toggle', () => { if ($('dj-log').open) loadDJLog(); });
 async function djControl(change) {
   djBusy = true;
   renderDJ(snapshot);
