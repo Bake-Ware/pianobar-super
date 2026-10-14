@@ -1766,3 +1766,15 @@ body[data-pinned="true"] #widget-pin {
 .mcp-server .mcp-remove { justify-self: start; padding: 8px 12px; border: 1px solid var(--line); background: var(--selected); color: var(--ink); }
 .mcp-actions { margin-top: 14px; }
 #station-mcp-url { user-select: all; }
+/* Settings → Radio page */
+.radio-logo-row { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; }
+.radio-logo-row img { max-height: 56px; max-width: 160px; object-fit: contain; border: 1px solid var(--line); padding: 6px; background: var(--paper); }
+.radio-logo-pick { flex: 1 1 240px; }
+.radio-logo-row button { padding: 12px 14px; border: 1px solid var(--line); background: var(--selected); color: var(--ink); }
+.radio-color { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 12px; }
+.radio-color > span { flex: 1 0 100%; }
+.radio-color input[type="color"] { width: 56px; height: 36px; padding: 2px; border: 1px solid var(--line); background: var(--paper); }
+.radio-color input[type="color"]:disabled { opacity: .4; }
+.radio-color .setting-check { display: flex; flex-direction: row; align-items: center; gap: 6px; }
+.radio-css { width: 100%; min-height: 220px; padding: 12px; border: 1px solid var(--line); background: var(--paper); color: var(--ink); font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; resize: vertical; }
+.radio-color input[type="checkbox"] { width: auto; padding: 0; }

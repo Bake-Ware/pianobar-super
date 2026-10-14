@@ -46,12 +46,14 @@ audio.addEventListener('ended', () => { if (wanted) retry = setTimeout(start, 10
 
 function render() {
   const live = !!state.live;
+  const showListeners = document.body.dataset.listeners !== '0';
   $('status').textContent = !live ? 'Off air' : state.paused ? 'Paused' :
-    'Live' + (state.listeners ? ` · ${state.listeners} listening` : '');
+    'Live' + (showListeners && state.listeners ? ` · ${state.listeners} listening` : '');
   $('status').classList.toggle('on', live && !state.paused);
   $('title').textContent = live ? state.title || '' : 'Nothing playing right now';
   $('artist').textContent = live ? [state.artist, state.album].filter(Boolean).join(' · ') : 'Check back soon.';
-  document.title = live && state.title ? `${state.title} · pianobar radio` : 'pianobar radio';
+  const station = (document.body.dataset.name || 'pianobar') + ' radio';
+  document.title = live && state.title ? `${state.title} · ${station}` : station;
   const cover = live ? state.cover || '' : '';
   if ($('cover').dataset.src !== cover) {
     $('cover').dataset.src = cover;

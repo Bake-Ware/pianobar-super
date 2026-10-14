@@ -13,6 +13,7 @@ import contextlib
 import gzip
 import hashlib
 import hmac
+import html
 import unicodedata
 import urllib.request
 import urllib.error
@@ -74,6 +75,11 @@ class Configuration:
                           tts_key='PIANOBAR_TTS_KEY', tts_ca='PIANOBAR_TTS_CA', metadata_network='PIANOBAR_METADATA_NETWORK')
 
 
+    # How the public radio page looks. Colors are #hex or '' for the built-in look.
+    radio_defaults = dict(name='pianobar', tagline='', theme='auto', accent='', background='', card='', text='',
+                          font='', css='', show_listeners=True, show_signin=True)
+    radio_logo_types = {'image/png': b'\x89PNG\r\n\x1a\n', 'image/jpeg': b'\xff\xd8\xff', 'image/gif': b'GIF8', 'image/webp': b'RIFF'}
+
     def __init__(self):
         self.directory = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'pianobar'
         data = os.environ.get('XDG_DATA_HOME', '')
@@ -117,6 +123,94 @@ class Configuration:
             raise ValueError('Invalid DJ settings file.')
         return self.dj_defaults | {'llm_key': '', 'tts_key': '', 'mcp_servers': []} | stored
 
+    def radio(self):
+        try:
+            stored = json.loads((self.directory / 'radio.json').read_text())
+        except FileNotFoundError:
+            stored = {}
+        except (OSError, ValueError):
+            stored = {}  # A broken file must never take the public page down.
+        if not isinstance(stored, dict):
+            stored = {}
+        return self.radio_defaults | {'logo_type': '', 'logo_version': ''} | {
+            k: v for k, v in stored.items() if k in self.radio_defaults or k in ('logo_type', 'logo_version')}
+
+    def radio_logo(self):
+        radio = self.radio()
+        if radio['logo_type'] not in self.radio_logo_types:
+            raise FileNotFoundError('No radio logo.')
+        return (self.directory / 'radio-logo.img').read_bytes(), radio['logo_type']
+
+    def save_radio_logo(self, message):
+        """Stores (or with data '', removes) the radio page's logo."""
+        if set(message) != {'data'} or not isinstance(message['data'], str):
+            raise ValueError('Send the logo as base64 data.')
+        with self.lock:
+            radio = self.radio()
+            path = self.directory / 'radio-logo.img'
+            if not message['data']:
+                with contextlib.suppress(FileNotFoundError):
+                    path.unlink()
+                radio.update(logo_type='', logo_version='')
+            else:
+                try:
+                    data = base64.b64decode(message['data'], validate=True)
+                except ValueError:
+                    raise ValueError('The logo upload was damaged. Try again.') from None
+                if len(data) > 1024 * 1024:
+                    raise ValueError('Choose a logo of at most 1 MB.')
+                kind = next((mime for mime, magic in self.radio_logo_types.items() if data.startswith(magic)
+                             and (mime != 'image/webp' or data[8:12] == b'WEBP')), None)
+                if kind is None:
+                    raise ValueError('Choose a PNG, JPEG, GIF or WebP image.')
+                if path.is_symlink():
+                    raise ValueError('The logo file is a symlink; remove it on the server.')
+                self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+                fd, name = tempfile.mkstemp(prefix='.logo-', dir=self.directory)
+                try:
+                    with os.fdopen(fd, 'wb') as file:
+                        file.write(data)
+                    os.replace(name, path)
+                finally:
+                    with contextlib.suppress(FileNotFoundError):
+                        os.unlink(name)
+                radio.update(logo_type=kind, logo_version=hashlib.sha256(data).hexdigest()[:12])
+            self.write(self.directory / 'radio.json', json.dumps(radio, indent=2) + '\n')
+        return self.public_radio(radio)
+
+    @classmethod
+    def public_radio(cls, radio):
+        return {key: radio[key] for key in cls.radio_defaults} | {'logo': bool(radio['logo_type'])}
+
+    @classmethod
+    def radio_changes(cls, changes, radio):
+        if not isinstance(changes, dict) or set(changes) - set(cls.radio_defaults):
+            raise ValueError('Unsupported radio page settings.')
+        for key, value in changes.items():
+            if key in ('show_listeners', 'show_signin'):
+                if type(value) is not bool:
+                    raise ValueError(f'{key} must be on or off.')
+            elif key == 'theme':
+                if value not in ('auto', 'light', 'dark'):
+                    raise ValueError('Choose Auto, Light, or Dark for the radio page.')
+            elif key in ('accent', 'background', 'card', 'text'):
+                if not isinstance(value, str) or (value and not re.fullmatch(r'#(?:[0-9a-fA-F]{3}){1,2}', value)):
+                    raise ValueError('Radio page colors must look like #e68b55, or be blank for the default.')
+            elif key == 'font':
+                if not isinstance(value, str) or (value and not re.fullmatch(r'[\w \-,.\'"]{1,120}', value)):
+                    raise ValueError('The radio font must be a list of font names, like Georgia, serif.')
+            elif key == 'css':
+                if not isinstance(value, str) or len(value.encode()) > 32768 or '\0' in value:
+                    raise ValueError('Custom CSS can be at most 32 KB.')
+            else:
+                value = ' '.join(cls.line(value, 'Radio ' + key).split())
+                if len(value) > (60 if key == 'name' else 160):
+                    raise ValueError('Keep the station name to 60 characters and the tagline to 160.')
+                if key == 'name' and not value:
+                    value = cls.radio_defaults['name']
+            radio[key] = value
+        return radio
+
     def public(self):
         values = self.native()
         result = dict(self.defaults)
@@ -144,6 +238,7 @@ class Configuration:
         result['dj'] = {key: dj[key] for key in self.dj_defaults}
         result['dj'].update(llm_keySet=bool(dj.get('llm_key')), tts_keySet=bool(dj.get('tts_key')), overrides=overrides)
         # MCP server credentials stay on the server, like the provider keys.
+        result['radio'] = self.public_radio(self.radio())
         result['dj']['mcp_servers'] = [dict({k: server.get(k) for k in ('id', 'name', 'url', 'hint', 'enabled', 'allow')},
                                             every=server.get('every') or 1, authSet=bool(server.get('auth')))
                                        for server in dj.get('mcp_servers') or [] if isinstance(server, dict)]
@@ -260,11 +355,11 @@ class Configuration:
         if set(message) - {'settings', 'apply'} or type(message.get('apply', False)) is not bool:
             raise ValueError('Invalid settings request.')
         changes = message.get('settings')
-        if not isinstance(changes, dict) or set(changes) - (set(self.defaults) | {'password', 'clearPassword', 'web', 'dj'}):
+        if not isinstance(changes, dict) or set(changes) - (set(self.defaults) | {'password', 'clearPassword', 'web', 'dj', 'radio'}):
             raise ValueError('Unsupported settings.')
         updates = {}
         for key, value in changes.items():
-            if key in ('web', 'clearPassword', 'dj'):
+            if key in ('web', 'clearPassword', 'dj', 'radio'):
                 continue
             if key in self.defaults and isinstance(self.defaults[key], bool):
                 if type(value) is not bool:
@@ -358,6 +453,8 @@ class Configuration:
                 elif not dj_changes.get(key):
                     url = key.replace('_key', '_url')
                     self.kept_secret(saved_urls[url], dj.get(url), dj.get(key), 'LLM key' if key == 'llm_key' else 'voice key')
+            radio_changes = changes.get('radio', {})
+            radio = self.radio_changes(radio_changes, self.radio())
             path = self.directory / 'config'
             try:
                 lines = path.read_text().splitlines(keepends=True)
@@ -370,13 +467,15 @@ class Configuration:
                 text += '\n'
             text += ''.join(f'{key} = {value}\n' for key, value in updates.items())
             # Validate both destinations before publishing either file.
-            if path.is_symlink() or (self.directory / 'web.json').is_symlink() or (self.directory / 'dj.json').is_symlink():
+            if any(p.is_symlink() for p in (path, self.directory / 'web.json', self.directory / 'dj.json', self.directory / 'radio.json')):
                 raise ValueError('Settings file is a symlink; edit its target manually.')
             self.write(path, text)
             if web_changes:
                 self.write(self.directory / 'web.json', json.dumps(web, indent=2) + '\n')
             if dj_changes:
                 self.write(self.directory / 'dj.json', json.dumps(dj, indent=2) + '\n')
+            if radio_changes:
+                self.write(self.directory / 'radio.json', json.dumps(radio, indent=2) + '\n')
         return self.public()
 
 
@@ -3277,7 +3376,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", headers.pop('Cache-Control', 'no-store'))
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' https: http:; "
+        self.send_header("Content-Security-Policy", headers.pop('Content-Security-Policy', None) or "default-src 'self'; img-src 'self' https: http:; "
                          "style-src 'self'; script-src 'self'; connect-src 'self'; media-src 'self' blob:; "
                          "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         for name, value in (headers or {}).items():
@@ -3334,7 +3433,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if 'Sec-Fetch-Mode' in self.headers:
                 # A browser: its own sign-in page instead of a password dialog.
                 if navigation and path == '/':
-                    self.reply(401, (self.server.assets / 'login.html').read_bytes(), 'text/html; charset=utf-8')
+                    self.public_page('login.html', 401)
                 else:
                     self.reply(401, b'{"error":"Sign in to pianobar."}')
             else:
@@ -3390,6 +3489,53 @@ class Handler(http.server.BaseHTTPRequestHandler):
             result.update({k: song.get(k) for k in ('title', 'artist', 'album', 'paused', 'elapsed', 'duration')}, cover=cover)
         return result
 
+    # The public pages may pull a brand's web fonts, stylesheets and images from HTTPS.
+    public_csp = ("default-src 'self'; img-src 'self' https: data:; style-src 'self' https:; font-src 'self' https: data:; "
+                  "script-src 'self'; connect-src 'self'; media-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+
+    def public_page(self, name, status=200):
+        """The sign-in or radio page, with the station's branding filled in."""
+        configuration = getattr(self.server, 'configuration', None) or Configuration()
+        radio = configuration.radio()
+        version = hashlib.sha256(json.dumps(radio, sort_keys=True).encode()).hexdigest()[:12]
+        logo = f'/radio/logo?v={radio["logo_version"]}' if radio['logo_type'] else ''
+        values = {
+            'name': radio['name'], 'tagline': radio['tagline'], 'theme': radio['theme'],
+            'version': version, 'logo': logo, 'favicon': logo or '/favicon.svg',
+            'listeners': '1' if radio['show_listeners'] else '0', 'signin': '1' if radio['show_signin'] else '0',
+        }
+        mark = (f'<img class="logo" src="{html.escape(logo)}" alt="">' if logo else
+                '<span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>')
+        station = html.escape(radio['name']) + ('<span class="brand-dot">.</span>' if radio['name'] == 'pianobar' else '')
+        brand = f'{mark}<span class="station-name">{station}</span>'
+        page = (self.server.assets / name).read_text()
+        page = re.sub(r'\{\{(\w+)\}\}', lambda m: brand if m[1] == 'brand' else html.escape(values.get(m[1], ''), quote=True), page)
+        self.reply(status, page.encode(), 'text/html; charset=utf-8', headers={'Content-Security-Policy': self.public_csp})
+
+    def radio_theme(self):
+        configuration = getattr(self.server, 'configuration', None) or Configuration()
+        radio = configuration.radio()
+        rules = []
+        light = '--paper:#f5f4ef;--card:#fff;--ink:#172b2b;--muted:#6f7772;--line:#ddded5;--bad:#b3261e'
+        dark = '--paper:#0f1c1c;--card:#172b2b;--ink:#eef0ea;--muted:#a4ada7;--line:#2c4343;--bad:#ffb4ab'
+        if radio['theme'] in ('light', 'dark'):
+            rules.append(f":root{{color-scheme:{radio['theme']};{light if radio['theme'] == 'light' else dark}}}")
+        custom = [f'--{var}:{radio[key]}' for key, var in (('accent', 'orange'), ('background', 'paper'), ('card', 'card'), ('text', 'ink'))
+                  if re.fullmatch(r'#(?:[0-9a-fA-F]{3}){1,2}', radio[key] or '')]
+        if radio['text']:
+            custom += ['--muted:color-mix(in srgb,var(--ink) 68%,transparent)', '--line:color-mix(in srgb,var(--ink) 16%,transparent)']
+        if custom:
+            rules.append(':root{' + ';'.join(custom) + '}')
+        if radio['font'] and re.fullmatch(r'[\w \-,.\'"]{1,120}', radio['font']):
+            rules.append(f"body{{font-family:{radio['font']}}}")
+        # The owner's own CSS comes last, so it can restyle anything.
+        css = '/* Generated from Settings → Radio page. */\n' + '\n'.join(rules) + '\n' + radio['css']
+        # @import must come first in a stylesheet; hoist the owner's to the top.
+        imports = re.findall(r'^\s*@import[^;]*;', radio['css'], re.M)
+        if imports:
+            css = '\n'.join(i.strip() for i in imports) + '\n' + re.sub(r'^\s*@import[^;]*;', '', css, flags=re.M)
+        self.reply(200, css.encode(), 'text/css; charset=utf-8')
+
     def radio_stream(self):
         try:
             joined = RADIO.join()
@@ -3420,8 +3566,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         finally:
             RADIO.leave(listener)
 
-    public_files = {'/radio': ('radio.html', 'text/html; charset=utf-8'),
-                    '/radio.js': ('radio.js', 'text/javascript; charset=utf-8'),
+    public_files = {'/radio.js': ('radio.js', 'text/javascript; charset=utf-8'),
                     '/login.js': ('login.js', 'text/javascript; charset=utf-8'),
                     '/public.css': ('public.css', 'text/css; charset=utf-8'),
                     '/favicon.svg': ('favicon.svg', 'image/svg+xml')}
@@ -3429,7 +3574,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlsplit(self.path)
         # The radio and the sign-in page's files are public; nothing there can change the player.
-        public = parsed.path in self.public_files or parsed.path in ('/api/radio', '/radio/stream') or (
+        public = parsed.path in self.public_files or parsed.path in ('/radio', '/api/radio', '/radio/stream', '/radio/theme.css', '/radio/logo') or (
             parsed.path.startswith('/radio/cover/'))
         if not self.valid_request(auth=not public):
             return
@@ -3439,6 +3584,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         if parsed.path == '/api/radio':
             self.reply(200, json.dumps(self.radio_state()).encode())
+            return
+        if parsed.path == '/radio':
+            self.public_page('radio.html')
+            return
+        if parsed.path == '/radio/theme.css':
+            self.radio_theme()
+            return
+        if parsed.path == '/radio/logo':
+            try:
+                data, mime = (getattr(self.server, 'configuration', None) or Configuration()).radio_logo()
+                self.reply(200, data, mime, headers={'Cache-Control': 'public, max-age=86400'})
+            except OSError:
+                self.reply(404, b'{"error":"No logo."}')
             return
         if parsed.path == '/radio/stream':
             self.radio_stream()
@@ -3671,7 +3829,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         playlist_paths = ('/api/playlists/save', '/api/playlists/add', '/api/playlists/delete', '/api/playlists/play',
                           '/api/playlists/stop', '/api/dj/playlist')
-        if self.path not in ("/api/command", "/api/settings", '/api/login', '/api/logout', "/api/dj", '/mcp', "/api/dj/announce", "/api/dj/pick", "/api/dj/control", "/api/dj/introduce", "/api/voice", '/api/clients/register',
+        if self.path not in ("/api/command", "/api/settings", '/api/login', '/api/logout', '/api/radio/logo', "/api/dj", '/mcp', "/api/dj/announce", "/api/dj/pick", "/api/dj/control", "/api/dj/introduce", "/api/voice", '/api/clients/register',
                              *playlist_paths,
                              '/api/clients/heartbeat', '/api/clients/update',
                              '/api/clients/route', '/api/clients/unregister'):
@@ -3687,8 +3845,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            # A playlist save carries up to 500 song IDs.
-            if length <= 0 or length > (65536 if self.path in playlist_paths or self.path == '/mcp' else 4096):
+            # A playlist carries up to 500 song IDs, settings up to 32 KB of radio CSS, a radio logo up to 1 MB.
+            limit = (1500000 if self.path == '/api/radio/logo' else
+                     65536 if self.path in playlist_paths or self.path in ('/mcp', '/api/settings') else 4096)
+            if length <= 0 or length > limit:
                 raise ValueError("Invalid request size.")
             self.connection.settimeout(5)
             message = json.loads(self.rfile.read(length))
@@ -3703,6 +3863,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 raise ValueError("Invalid request.")
             if self.path == '/api/login':
                 self.login(message)
+                return
+            if self.path == '/api/radio/logo':
+                self.reply(200, json.dumps(self.server.configuration.save_radio_logo(message)).encode())
                 return
             if self.path in ('/api/dj', '/api/dj/announce', '/api/dj/pick', '/api/dj/control', '/api/dj/introduce', '/api/voice'):
                 dj = self.server.session.dj

@@ -1351,6 +1351,75 @@ function mcpChanges() {
   });
 }
 const settingsKeys = ['user', 'cache_dir', 'cache_songs', 'offline', 'offline_fallback', 'audio_quality', 'audio_buffer_ms'];
+// Radio page branding: plain fields, color pickers that can fall back to Default, and an instant logo upload.
+const radioKeys = ['name', 'tagline', 'theme', 'font', 'css', 'show_listeners', 'show_signin'];
+const radioColors = ['accent', 'background', 'card', 'text'];
+const radioColorDefaults = {accent: '#e68b55', background: '#f5f4ef', card: '#ffffff', text: '#172b2b'};
+for (const holder of document.querySelectorAll('.radio-color')) {
+  const key = holder.dataset.key;
+  const picker = Object.assign(document.createElement('input'), {type: 'color', id: 'setting-radio-' + key});
+  picker.setAttribute('aria-label', holder.textContent + ' color');
+  const toggle = Object.assign(document.createElement('label'), {className: 'setting-check'});
+  const custom = Object.assign(document.createElement('input'), {type: 'checkbox', id: 'setting-radio-' + key + '-custom'});
+  toggle.append(custom, 'Custom');
+  custom.addEventListener('change', () => { picker.disabled = !custom.checked; });
+  picker.addEventListener('input', () => { custom.checked = true; });
+  holder.append(picker, toggle);
+}
+function renderRadioSettings(radio) {
+  for (const key of radioKeys) {
+    const input = $('setting-radio-' + key);
+    if (input.type === 'checkbox') input.checked = !!radio[key];
+    else input.value = radio[key] ?? '';
+  }
+  for (const key of radioColors) {
+    $('setting-radio-' + key).value = radio[key] || radioColorDefaults[key];
+    $('setting-radio-' + key + '-custom').checked = !!radio[key];
+    $('setting-radio-' + key).disabled = !radio[key];
+  }
+  $('radio-logo-preview').hidden = !radio.logo;
+  if (radio.logo) $('radio-logo-preview').src = '/radio/logo?' + Date.now();
+  $('radio-logo-remove').hidden = !radio.logo;
+}
+function radioChanges() {
+  const baseline = settingsBaseline.radio || {};
+  const changes = {};
+  for (const key of radioKeys) {
+    const input = $('setting-radio-' + key);
+    const value = input.type === 'checkbox' ? input.checked : input.value;
+    if (value !== baseline[key]) changes[key] = value;
+  }
+  for (const key of radioColors) {
+    const value = $('setting-radio-' + key + '-custom').checked ? $('setting-radio-' + key).value : '';
+    if (value !== (baseline[key] || '')) changes[key] = value;
+  }
+  return changes;
+}
+async function uploadRadioLogo(data) {
+  $('radio-logo-status').textContent = data ? 'Uploading…' : 'Removing…';
+  try {
+    const response = await fetch('/api/radio/logo', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({data})});
+    const radio = await response.json();
+    if (!response.ok) throw new Error(radio.error || 'Could not save the logo.');
+    settingsBaseline.radio = {...settingsBaseline.radio, logo: radio.logo};
+    $('radio-logo-preview').hidden = !radio.logo;
+    if (radio.logo) $('radio-logo-preview').src = '/radio/logo?' + Date.now();
+    $('radio-logo-remove').hidden = !radio.logo;
+    $('radio-logo-status').textContent = radio.logo ? 'Logo saved. It replaces the bars next to the station name.' : 'Logo removed.';
+  } catch (error) { $('radio-logo-status').textContent = error.message; }
+}
+$('radio-logo-file').addEventListener('change', event => {
+  const file = event.target.files[0];
+  event.target.value = '';
+  if (!file) return;
+  if (file.size > 1024 * 1024) { $('radio-logo-status').textContent = 'Choose a logo of at most 1 MB.'; return; }
+  const reader = new FileReader();
+  reader.onload = () => uploadRadioLogo(String(reader.result).split(',')[1] || '');
+  reader.readAsDataURL(file);
+});
+$('radio-logo-remove').addEventListener('click', () => uploadRadioLogo(''));
+
 async function loadSettings(force = false) {
   if (settingsBusy || (settingsLoaded && !force)) return;
   settingsBusy = true;
@@ -1394,6 +1463,7 @@ async function loadSettings(force = false) {
     $('dj-key-note').textContent = `${data.dj.llm_keySet ? 'LLM key saved.' : 'No LLM key saved.'} ${data.dj.tts_keySet ? 'Voice key saved.' : 'No voice key saved.'} Leave key fields blank to keep existing keys.`;
     $('dj-environment-note').hidden = !data.dj.overrides.length;
     $('dj-environment-note').textContent = 'Set by server environment: ' + data.dj.overrides.join(', ') + '. Edit those environment variables on the server to change these fields.';
+    renderRadioSettings(data.radio);
     $('setting-password').value = '';
     $('setting-web-password').value = '';
     $('setting-clearPassword').checked = false;
@@ -1442,6 +1512,8 @@ $('settings-form').addEventListener('submit', async event => {
     catch (error) { $('settings-status').textContent = error.message; return; }
   }
   if (Object.keys(dj).length) changes.dj = dj;
+  const radio = radioChanges();
+  if (Object.keys(radio).length) changes.radio = radio;
   settingsBusy = true;
   updateDisabled();
   let saved = false;
@@ -1457,7 +1529,7 @@ $('settings-form').addEventListener('submit', async event => {
     $('setting-dj-tts_key').value = '';
     $('settings-status').textContent = apply
       ? 'Saved. Starting the player… Web address and password changes apply after restarting pianobar.'
-      : 'Saved. Names, voice and intro playback are active now; set sizing applies to the next selection. Restart the player for account, listening, provider and metadata changes; restart pianobar for web access changes.';
+      : 'Saved. The radio page, names, voice and intro playback are active now; set sizing applies to the next selection. Restart the player for account, listening, provider and metadata changes; restart pianobar for web access changes.';
   } catch (error) { $('settings-status').textContent = error.message; }
   finally {
     settingsBusy = false;

@@ -140,6 +140,54 @@ with tempfile.TemporaryDirectory(prefix='pianobar-network-') as temporary:
         # ...and it never registers a device.
         assert all(c['name'] != 'Radio' for c in request('/api/clients')['clients'])
         mp3.close()
+        # Branding: saved from Settings, rendered (escaped) into the public pages and their stylesheet.
+        def page(path, headers=None):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(origin + path, headers=headers or {}), timeout=5) as response:
+                    return response.status, dict(response.headers), response.read().decode()
+            except urllib.error.HTTPError as error:
+                return error.code, dict(error.headers), error.read().decode()
+        status, headers, body = page('/radio')
+        assert status == 200 and '<span class="station-name">pianobar<span class="brand-dot">' in body and '{{' not in body
+        assert "font-src 'self' https:" in headers['Content-Security-Policy'] and "script-src 'self';" in headers['Content-Security-Policy']
+        assert request('/api/settings')['radio'] == {'name': 'pianobar', 'tagline': '', 'theme': 'auto', 'accent': '', 'background': '',
+            'card': '', 'text': '', 'font': '', 'css': '', 'show_listeners': True, 'show_signin': True, 'logo': False}
+        brand = {'name': 'Night <Owl> & "Co"', 'tagline': 'Late <b>jams</b>', 'theme': 'dark', 'accent': '#12ab9f', 'text': '#fff',
+                 'font': "'Courier New', monospace", 'show_signin': False,
+                 'css': ".card { border-radius: 0 }\n@import url('https://fonts.example/x.css');\n"}
+        request('/api/settings', {'settings': {'radio': brand}})
+        assert request('/api/settings')['radio']['name'] == 'Night <Owl> & "Co"'
+        status, headers, body = page('/radio')
+        assert 'Night &lt;Owl&gt; &amp; &quot;Co&quot;' in body and '<Owl>' not in body and 'Late &lt;b&gt;jams&lt;/b&gt;' in body
+        assert 'data-signin="0"' in body and 'data-theme="dark"' in body and 'brand-dot' not in body
+        version = re.search(r'/radio/theme\.css\?v=(\w+)', body)[1]
+        status, headers, css = page('/radio/theme.css?v=' + version)
+        assert status == 200 and headers['Content-Type'].startswith('text/css')
+        assert css.startswith("@import url('https://fonts.example/x.css');")
+        assert '--orange:#12ab9f' in css and '--ink:#fff' in css and 'color-scheme:dark' in css and "font-family:'Courier New', monospace" in css
+        assert css.rstrip().endswith('.card { border-radius: 0 }')
+        status, headers, body = page('/', {'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document'})
+        assert status == 401 and 'Night &lt;Owl&gt;' in body and 'href="/radio"' in body
+        for bad in [{'accent': 'red; } body { x'}, {'font': 'a;}</style>'}, {'theme': 'neon'}, {'css': 'x' * 40000}, {'logo': True}, {'name': 'a\nb'}]:
+            request('/api/settings', {'settings': {'radio': bad}}, expected=400)
+        request('/api/settings', {'settings': {'radio': {'name': '   '}}})
+        assert request('/api/settings')['radio']['name'] == 'pianobar'
+        # Logo: real images only, served publicly, and removable.
+        png = image
+        assert request('/api/radio/logo', {'data': base64.b64encode(png).decode()})['logo'] is True
+        status, headers, body = page('/radio')
+        assert re.search(r'<img class="logo" src="/radio/logo\?v=[0-9a-f]{12}"', body) and 'rel="icon" href="/radio/logo' in body
+        assert request('/radio/logo', authorized=False) == png
+        request('/api/radio/logo', {'data': base64.b64encode(b'<svg onload=alert(1)>').decode()}, expected=400)
+        request('/api/radio/logo', {'data': 'not base64!'}, expected=400)
+        request('/api/radio/logo', {'data': base64.b64encode(png).decode()}, authorized=False, expected=401)
+        request('/api/settings', {'settings': {'radio': {'css': 'x'}}}, authorized=False, expected=401)
+        assert request('/api/radio/logo', {'data': ''})['logo'] is False
+        request('/radio/logo', authorized=False, expected=404)
+        # A hand-broken radio.json never takes the public page down.
+        (config / 'radio.json').write_text('{oops')
+        assert page('/radio')[0] == 200 and page('/radio/theme.css')[0] == 200
+        (config / 'radio.json').unlink()
         # ...but nothing else is public.
         for path in ['/api/clients', '/api/settings', '/api/library', '/api/dj', '/api/playlists', '/radio/../api/state']:
             request(path, authorized=False, expected=401 if not path.startswith('/radio/..') else 401)

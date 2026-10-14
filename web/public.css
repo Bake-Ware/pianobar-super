@@ -112,7 +112,7 @@ input {
 	padding:11px 12px;
 	border:1px solid var(--line);
 	border-radius:10px;
-	background:var(--paper);
+	background:color-mix(in srgb,var(--ink) 5%,var(--card));
 	color:var(--ink);
 }
 .button {
@@ -126,7 +126,7 @@ input {
 	border-radius:999px;
 	border:1px solid var(--ink);
 	background:var(--ink);
-	color:var(--paper);
+	color:var(--card);
 	font-weight:700;
 	text-decoration:none;
 	cursor:pointer;
@@ -258,4 +258,16 @@ input {
 	display:flex;
 	flex-direction:column;
 	gap:12px;
+}
+.logo {
+	display:block;
+	max-height:44px;
+	max-width:180px;
+	object-fit:contain;
+}
+.tagline:empty {
+	display:none;
+}
+body[data-signin="0"] .signin {
+	display:none;
 }

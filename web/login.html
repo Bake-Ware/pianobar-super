@@ -1,18 +1,20 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{theme}}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#172b2b">
-  <title>Sign in · pianobar</title>
-  <link rel="icon" href="/favicon.svg">
+  <title>{{name}}</title>
+  <link rel="icon" href="{{favicon}}">
   <link rel="stylesheet" href="/public.css">
+  <link rel="stylesheet" href="/radio/theme.css?v={{version}}">
   <script src="/login.js" defer></script>
 </head>
-<body>
+<body class="login-page" data-name="{{name}}" data-listeners="{{listeners}}" data-signin="{{signin}}">
   <main class="card">
-    <span class="brand"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span><span>pianobar<span class="brand-dot">.</span></span></span>
-    <a class="button" href="/radio">▶ Listen to the radio</a>
+    <header class="brand">{{brand}}</header>
+    <p class="tagline">{{tagline}}</p>
+    <a class="button listen" href="/radio">▶ Listen to the radio</a>
     <p class="footnote">Anyone can listen. Only you can change what's playing.</p>
     <div class="divider">or sign in to control it</div>
     <form id="login" class="stack">

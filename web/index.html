@@ -104,7 +104,7 @@
       <p class="eyebrow">YOUR PLAYER, YOUR WAY</p><h1 id="settings-title">Settings</h1>
       <p id="setup-message" hidden>Add your Pandora account to start listening, or choose offline startup to use a saved library.</p>
       <div class="settings-tabs" role="tablist" aria-label="Settings sections">
-        <button type="button" role="tab" id="settings-tab-listening" data-tab="listening" aria-controls="settings-panel-listening" aria-selected="true">Listening</button><button type="button" role="tab" id="settings-tab-pandora" data-tab="pandora" aria-controls="settings-panel-pandora" aria-selected="false">Pandora</button><button type="button" role="tab" id="settings-tab-dj" data-tab="dj" aria-controls="settings-panel-dj" aria-selected="false">DJ</button><button type="button" role="tab" id="settings-tab-connections" data-tab="connections" aria-controls="settings-panel-connections" aria-selected="false">Connections</button><button type="button" role="tab" id="settings-tab-web" data-tab="web" aria-controls="settings-panel-web" aria-selected="false">Web access</button>
+        <button type="button" role="tab" id="settings-tab-listening" data-tab="listening" aria-controls="settings-panel-listening" aria-selected="true">Listening</button><button type="button" role="tab" id="settings-tab-pandora" data-tab="pandora" aria-controls="settings-panel-pandora" aria-selected="false">Pandora</button><button type="button" role="tab" id="settings-tab-dj" data-tab="dj" aria-controls="settings-panel-dj" aria-selected="false">DJ</button><button type="button" role="tab" id="settings-tab-connections" data-tab="connections" aria-controls="settings-panel-connections" aria-selected="false">Connections</button><button type="button" role="tab" id="settings-tab-web" data-tab="web" aria-controls="settings-panel-web" aria-selected="false">Web access</button><button type="button" role="tab" id="settings-tab-radio" data-tab="radio" aria-controls="settings-panel-radio" aria-selected="false">Radio page</button>
       </div>
       <form id="settings-form">
         <div class="settings-panel" role="tabpanel" id="settings-panel-listening" aria-labelledby="settings-tab-listening">
@@ -222,8 +222,37 @@
           <p class="settings-hint">Network access uses plain HTTP, so use it on a trusted network.</p>
           <p class="settings-tag">Applies after restarting pianobar</p></fieldset>
           <fieldset><legend>Public radio</legend>
-          <p class="settings-hint">Anyone can listen at <a href="/radio" target="_blank" rel="noopener"><b>/radio</b></a> without signing in. They can't change anything.</p>
+          <p class="settings-hint">Anyone can listen at <a href="/radio" target="_blank" rel="noopener"><b>/radio</b></a> without signing in. They can't change anything. Brand it under Radio page.</p>
           <button id="sign-out" type="button">Sign out of this browser</button></fieldset>
+        </div>
+        <div class="settings-panel" role="tabpanel" id="settings-panel-radio" aria-labelledby="settings-tab-radio" hidden>
+          <p class="settings-lead">Make the public <a href="/radio" target="_blank" rel="noopener"><b>/radio</b></a> page your own. The sign-in page uses the same look. Changes go live as soon as you save.</p>
+          <fieldset><legend>Name &amp; logo</legend><div class="settings-grid">
+            <label>Station name<input id="setting-radio-name" maxlength="60" autocomplete="off" placeholder="pianobar"></label>
+            <label>Tagline<input id="setting-radio-tagline" maxlength="160" autocomplete="off" placeholder="Good music. Your pace."></label>
+            <div class="settings-wide radio-logo-row">
+              <img id="radio-logo-preview" alt="Current logo" hidden>
+              <label class="radio-logo-pick">Logo <small>PNG, JPEG, GIF or WebP, up to 1 MB. Uploads right away.</small><input id="radio-logo-file" type="file" accept="image/png,image/jpeg,image/gif,image/webp"></label>
+              <button id="radio-logo-remove" type="button" hidden>Remove logo</button>
+            </div>
+          </div><p id="radio-logo-status" class="settings-hint" role="status"></p></fieldset>
+          <fieldset><legend>Look</legend><div class="settings-grid">
+            <label>Theme<select id="setting-radio-theme"><option value="auto">Follow the listener's device</option><option value="light">Always light</option><option value="dark">Always dark</option></select></label>
+            <label>Font <small>Font names, like Georgia, serif. Load web fonts with @import in custom CSS.</small><input id="setting-radio-font" maxlength="120" autocomplete="off" placeholder="Inter, Helvetica Neue, Arial, sans-serif"></label>
+            <div class="radio-color" data-key="accent"><span>Accent</span></div>
+            <div class="radio-color" data-key="background"><span>Background</span></div>
+            <div class="radio-color" data-key="card"><span>Card</span></div>
+            <div class="radio-color" data-key="text"><span>Text</span></div>
+          </div><p class="settings-hint">Leave a color on Default to keep the built-in light and dark looks.</p>
+          <div class="settings-checks">
+            <label class="setting-check"><input id="setting-radio-show_listeners" type="checkbox">Show how many people are listening</label>
+            <label class="setting-check"><input id="setting-radio-show_signin" type="checkbox">Show the Sign in link</label>
+          </div></fieldset>
+          <fieldset><legend>Custom CSS</legend>
+            <textarea id="setting-radio-css" class="radio-css" rows="12" spellcheck="false" autocomplete="off" placeholder="/* Anything goes. For example: */&#10;@import url('https://fonts.googleapis.com/css2?family=Pacifico&amp;display=swap');&#10;.station-name { font-family: Pacifico, cursive; }&#10;body { background: url('https://example.com/backdrop.jpg') center / cover; }&#10;.card { border-radius: 0; }"></textarea>
+            <p class="settings-hint">Up to 32 KB, applied after everything else. Hooks: <code>body.radio-page</code>, <code>body.login-page</code>, <code>.card</code>, <code>.brand</code>, <code>.logo</code>, <code>.station-name</code>, <code>.tagline</code>, <code>.status</code>, <code>.cover</code>, <code>.title</code>, <code>.artist</code>, <code>.progress</code>, <code>#play</code>, <code>.volume</code>, <code>.footnote</code>. Variables: <code>--orange</code> (accent), <code>--paper</code>, <code>--card</code>, <code>--ink</code>, <code>--muted</code>, <code>--line</code>. Images and fonts may load from any HTTPS address.</p>
+            <p><a href="/radio" target="_blank" rel="noopener">Open the radio page ↗</a></p>
+          </fieldset>
         </div>
         <div class="settings-actions">
           <p id="settings-status" role="status">DJ settings apply on save. Others need a restart, which briefly interrupts playback.</p>
