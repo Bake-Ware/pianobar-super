@@ -17,6 +17,7 @@ import html
 import unicodedata
 import urllib.request
 import urllib.error
+import http.client
 import http.server
 import json
 import os
@@ -2674,7 +2675,9 @@ class DJ:
                     over = self.set_options.get('play_over_music', True) is not False
                     self.session.status.send(json.dumps(dict(type='dj_voice', id=str(path), voice=serial, overMusic=over,
                                                              level=self.mix['voice_level'], duck=self.mix['duck_depth'])).encode())
-                    self.voice_state.update(status='on_air')
+                    # Listeners that play whole files fetch the line and mix it themselves.
+                    self.voice_state.update(status='on_air', audio=f'/api/dj/line/{serial}', overMusic=over,
+                                            level=self.mix['voice_level'], duck=self.mix['duck_depth'])
                     song = dict(self.session.state)
                 self.session.changed()
             self.memory.add_intro(text, song, kind)
@@ -2684,6 +2687,16 @@ class DJ:
                         old.unlink()
         except (DJUnavailable, ValueError, OSError) as error:
             self.voice_failed(serial, error)
+
+    def line(self, serial):
+        """(path, mime) of a recent DJ line's audio."""
+        if not re.fullmatch(r'[1-9][0-9]{0,9}', serial):
+            raise ValueError('Invalid DJ line.')
+        directory = self.voice_dir
+        if directory:
+            for path in Path(directory).glob(f'line-{serial}.*'):
+                return path, {'.mp3': 'audio/mpeg', '.ogg': 'audio/ogg'}.get(path.suffix, 'audio/wav')
+        raise FileNotFoundError('That DJ line is no longer available.')
 
     def stop_voice(self):
         with self.voice_lock:
@@ -2944,6 +2957,211 @@ class Radio:
 RADIO = Radio()
 
 
+class AudioRedirects(urllib.request.HTTPRedirectHandler):
+    """Follow a CDN's redirects, but only to HTTP(S)."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urlsplit(newurl).scheme not in ('http', 'https'):
+            return None
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def audio_type(head):
+    """The MIME type of an audio file from its first bytes, or None."""
+    if head[4:8] == b'ftyp':
+        return 'audio/mp4'
+    if head.startswith(b'ID3'):
+        return 'audio/mpeg'
+    if len(head) > 1 and head[0] == 0xff and head[1] & 0xf0 == 0xf0:
+        # ADTS (AAC) has layer bits 00; MPEG audio doesn't.
+        return 'audio/aac' if head[1] & 0x06 == 0 else 'audio/mpeg'
+    if len(head) > 1 and head[0] == 0xff and head[1] & 0xe0 == 0xe0:
+        return 'audio/mpeg'
+    if head.startswith(b'\x1a\x45\xdf\xa3'):
+        return 'audio/x-matroska'
+    if head.startswith(b'OggS'):
+        return 'audio/ogg'
+    if head.startswith(b'fLaC'):
+        return 'audio/flac'
+    if head[:4] == b'RIFF' and head[8:12] == b'WAVE':
+        return 'audio/wav'
+    return None
+
+
+class Tracks:
+    """Whole songs, for listeners that play files instead of the live stream.
+
+    As soon as the player knows a song (the current one and the next), its
+    audio is downloaded from Pandora into a small cache, because the URLs
+    expire. Listeners fetch each file by track id from /api/tracks/<id> (Range
+    requests work) and play it themselves, prefetching the next one. Songs
+    from the offline library are served straight from the saved files. Old
+    downloads are evicted; the cache starts empty with every run."""
+    keep = 6                    # finished downloads kept besides the current and next songs
+    limit = 64 * 1024 * 1024    # bytes per song
+    timeout = 30                # seconds without data before a download fails
+    retry = 10                  # seconds before a failed download is tried again
+    attempts = 3
+    wait = 25                   # seconds a listener's request waits for a download in progress
+
+    def __init__(self, session):
+        self.session = session
+        self.lock = threading.Lock()
+        self.entries = collections.OrderedDict()  # id -> entry, least recently wanted first
+        self.wanted = ()
+        self.directory = None
+        self.slots = threading.BoundedSemaphore(2)
+
+    @staticmethod
+    def track_id(url, token):
+        """A stable id for one song of a playlist: never the URL or token itself."""
+        if not url:
+            return ''
+        source = token or urlsplit(url)._replace(query='', fragment='').geturl()
+        return hashlib.sha256(b'pandora\0' + source.encode()).hexdigest()
+
+    @staticmethod
+    def saved_id(name):
+        return name[:64] if isinstance(name, str) and re.fullmatch(r'[0-9a-f]{64}\.mka', name) else ''
+
+    def open(self, cache_dir):
+        """Called with the lock held. Prefer the song cache's disk; fall back to a temporary directory."""
+        try:
+            if not cache_dir:
+                raise ValueError('No song cache.')
+            directory = Path(cache_dir) / 'delivery'
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        except (OSError, TypeError, ValueError):
+            directory = Path(tempfile.mkdtemp(prefix='pianobar-tracks-'))
+        # Files from an earlier run: their songs are long gone.
+        for old in directory.iterdir():
+            if re.fullmatch(r'[0-9a-f]{64}\.audio|\.partial-\w+', old.name):
+                with contextlib.suppress(OSError):
+                    old.unlink()
+        self.directory = directory
+
+    def update(self, state, private):
+        """With each player state: start downloads for new songs. Returns (trackId, nextTrackId)."""
+        if state.get('offline'):
+            return self.saved_id(state.get('savedId')), self.saved_id(state.get('queuedSavedId'))
+        songs = [(self.track_id(private.get('_audioUrl'), private.get('_trackToken')), private.get('_audioUrl')),
+                 (self.track_id(private.get('_nextAudioUrl'), private.get('_nextTrackToken')), private.get('_nextAudioUrl'))]
+        proxy = private.get('_proxy') or ''
+        start = []
+        now = time.monotonic()
+        with self.lock:
+            if self.directory is None:
+                self.open(state.get('cacheDir') or '')
+            self.wanted = tuple(track for track, _ in songs if track)
+            for track, url in songs:
+                if not track or not isinstance(url, str) or urlsplit(url).scheme not in ('http', 'https'):
+                    continue
+                entry = self.entries.get(track)
+                if entry is None:
+                    entry = self.entries[track] = dict(id=track, status='new', attempts=0, failed=0.0,
+                                                       done=threading.Event(), path=None, mime='', size=0)
+                self.entries.move_to_end(track)
+                entry.update(url=url, proxy=proxy)  # The player's newest URL for it.
+                if entry['status'] == 'new' or (entry['status'] == 'failed' and entry['attempts'] < self.attempts and
+                                                now - entry['failed'] >= self.retry):
+                    entry['status'] = 'downloading'
+                    entry['done'].clear()
+                    start.append(entry)
+            self.evict()
+        for entry in start:
+            threading.Thread(target=self.fetch, args=(entry,), daemon=True).start()
+        return songs[0][0], songs[1][0]
+
+    def evict(self):
+        """Called with the lock held: keep the wanted songs and the newest few others."""
+        spare = [track for track, entry in self.entries.items()
+                 if track not in self.wanted and entry['status'] != 'downloading']
+        for track in spare[:max(0, len(spare) - self.keep)]:
+            entry = self.entries.pop(track)
+            if entry['path']:
+                with contextlib.suppress(OSError):
+                    os.unlink(entry['path'])
+
+    def fetch(self, entry):
+        with self.slots:
+            temporary, result = None, dict(status='failed')
+            try:
+                handlers = [AudioRedirects()]
+                if entry['proxy']:
+                    handlers.append(urllib.request.ProxyHandler({'http': entry['proxy'], 'https': entry['proxy']}))
+                request = urllib.request.Request(entry['url'], headers={'User-Agent': USER_AGENT})
+                with urllib.request.build_opener(*handlers).open(request, timeout=self.timeout) as response:
+                    expected = response.headers.get('Content-Length')
+                    if expected and int(expected) > self.limit:
+                        raise ValueError('The song is too large.')
+                    fd, temporary = tempfile.mkstemp(prefix='.partial-', dir=self.directory)
+                    size, head = 0, b''
+                    with os.fdopen(fd, 'wb') as out:
+                        while chunk := response.read(65536):
+                            size += len(chunk)
+                            if size > self.limit:
+                                raise ValueError('The song is too large.')
+                            if len(head) < 16:
+                                head = (head + chunk)[:16]
+                            out.write(chunk)
+                    if expected and int(expected) != size:
+                        raise ValueError('The download ended early.')
+                mime = audio_type(head)
+                if not mime:
+                    raise ValueError('Pandora did not return audio.')
+                path = self.directory / (entry['id'] + '.audio')
+                os.replace(temporary, path)
+                temporary = None
+                result = dict(status='ready', path=str(path), mime=mime, size=size)
+            except (OSError, ValueError, http.client.HTTPException) as error:
+                print(f'Could not download a song for listeners: {error}', file=sys.stderr, flush=True)
+            finally:
+                if temporary:
+                    with contextlib.suppress(OSError):
+                        os.unlink(temporary)
+            with self.lock:
+                entry.update(result)
+                if result['status'] == 'failed':
+                    entry['attempts'] += 1
+                    entry['failed'] = time.monotonic()
+                if self.entries.get(entry['id']) is not entry and entry.get('path'):
+                    with contextlib.suppress(OSError):
+                        os.unlink(entry['path'])  # Evicted meanwhile.
+                self.evict()
+                entry['done'].set()
+        with self.session.condition:
+            self.session.changed()
+
+    def ready(self, track, offline=False):
+        if not track:
+            return False
+        if offline:
+            return True
+        with self.lock:
+            entry = self.entries.get(track)
+            return entry is not None and entry['status'] == 'ready'
+
+    def locate(self, track):
+        """(path, mime) of a song's whole file; waits briefly for a download in progress."""
+        if not re.fullmatch(r'[0-9a-f]{64}', track):
+            raise ValueError('Invalid track.')
+        with self.lock:
+            entry = self.entries.get(track)
+        if entry is None:
+            # A song from the offline library.
+            with self.session.condition:
+                directory = self.session.state.get('cacheDir')
+            if directory and (Path(directory) / (track + '.mka')).is_file():
+                return Path(directory) / (track + '.mka'), 'audio/x-matroska'
+            raise FileNotFoundError('That song is no longer available.')
+        entry['done'].wait(self.wait)
+        with self.lock:
+            if entry['status'] == 'ready':
+                return Path(entry['path']), entry['mime']
+            if entry['status'] == 'downloading' or (entry['status'] == 'failed' and entry['attempts'] < self.attempts):
+                raise TimeoutError('The song is still downloading.')
+        raise FileNotFoundError('That song could not be downloaded.')
+
+
 class LoginGuard:
     """Slows password guessing on the sign-in page: a few tries per address,
     then a pause, and a cap on failures from everywhere at once."""
@@ -3007,6 +3225,7 @@ class Session:
         self.quit_requested = False
         self.restart = threading.Event()
         self.metadata = Metadata(self)
+        self.tracks = Tracks(self)
         self.dj = DJ(self)
         self.playlists = Playlists(self)
 
@@ -3125,6 +3344,10 @@ class Session:
                 message = json.loads(self.status.recv(262144))
             except (OSError, ValueError):
                 return
+            if message.get('type') == 'state':
+                # Song URLs and tokens stay here: they never reach the state listeners see.
+                private = {key: message.pop(key) for key in [key for key in message if key.startswith('_')]}
+                message['trackId'], message['nextTrackId'] = self.tracks.update(message, private)
             with self.condition:
                 if message.get("type") == "state":
                     self.state = message
@@ -3157,7 +3380,11 @@ class Session:
     def snapshot(self, after):
         with self.condition:
             self.condition.wait_for(lambda: self.revision != after or (self.exited and self.quit_requested), timeout=20)
-            return {"revision": self.revision, "state": dict(self.state, metadata=self.metadata.current(self.state), songKey=self.dj.song_key(self.state)), "prompt": self.prompt,
+            offline = bool(self.state.get('offline'))
+            tracks = dict(trackReady=self.tracks.ready(self.state.get('trackId'), offline),
+                          nextTrackReady=self.tracks.ready(self.state.get('nextTrackId'), offline))
+            return {"revision": self.revision, "delivery": "files",
+                    "state": dict(self.state, metadata=self.metadata.current(self.state), songKey=self.dj.song_key(self.state), **tracks), "prompt": self.prompt,
                     "output": self.output, "pending": self.pending,
                     "exited": self.exited and self.quit_requested,
                     "playerStopped": self.exited, "setupRequired": self.setup_required,
@@ -3596,6 +3823,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
         with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             self.wfile.write(data)
 
+    def send_file(self, path, mime):
+        """A whole file, or the one byte range asked for (bytes=a-b, a- or -n)."""
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as source:
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError('Not a file.')
+            size = info.st_size
+            start, end, status = 0, size - 1, 200
+            # A malformed or multi-part range gets the whole file, which HTTP allows.
+            match = re.fullmatch(r'bytes=(\d*)-(\d*)', self.headers.get('Range', '').strip())
+            if match and (match[1] or match[2]):
+                if match[1]:
+                    start = int(match[1])
+                    end = min(int(match[2]), size - 1) if match[2] else size - 1
+                else:
+                    start = max(0, size - int(match[2]))
+                if start >= size or start > end:
+                    self.reply(416, b'{"error":"That range is outside the file."}', headers={'Content-Range': f'bytes */{size}'})
+                    return
+                status = 206
+            self.send_response(status)
+            self.send_header('Content-Type', mime)
+            self.send_header('Content-Length', str(max(0, end - start + 1)))
+            self.send_header('Accept-Ranges', 'bytes')
+            if status == 206:
+                self.send_header('Content-Range', f'bytes {start}-{end}/{size}')
+            # A track id always names the same audio.
+            self.send_header('Cache-Control', 'private, max-age=86400')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.end_headers()
+            source.seek(start)
+            remaining = end - start + 1
+            with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                while remaining > 0:
+                    chunk = source.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    remaining -= len(chunk)
+
     def authorized(self):
         expected = getattr(self.server, 'authorization', None)
         if expected is None:
@@ -3823,6 +4091,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.reply(200, data, mime, headers={'Cache-Control': 'public, max-age=3600'})
             except (OSError, ValueError):
                 self.reply(404, b'{"error":"Artwork is unavailable."}')
+            return
+        if parsed.path.startswith('/api/tracks/'):
+            # Whole songs for listeners that play files: the current one, the next, or a saved one.
+            try:
+                path, mime = self.server.session.tracks.locate(parsed.path.removeprefix('/api/tracks/'))
+                self.send_file(path, mime)
+            except TimeoutError:
+                self.reply(503, b'{"error":"The song is still downloading. Try again shortly."}', headers={'Retry-After': '2'})
+            except (OSError, ValueError):
+                self.reply(404, b'{"error":"That song is unavailable."}')
+            return
+        if parsed.path.startswith('/api/dj/line/'):
+            # A DJ line as one file, for listeners that mix it themselves.
+            try:
+                path, mime = self.server.session.dj.line(parsed.path.removeprefix('/api/dj/line/'))
+                self.send_file(path, mime)
+            except (OSError, ValueError):
+                self.reply(404, b'{"error":"That DJ line is no longer available."}')
             return
         if parsed.path.startswith('/api/download/'):
             try:

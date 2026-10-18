@@ -323,6 +323,15 @@ void BarWebState (const BarApp_t *app) {
 	string (object, "nextTitle", upcoming == NULL ? NULL : upcoming->title);
 	string (object, "nextArtist", upcoming == NULL ? NULL : upcoming->artist);
 	string (object, "nextAlbum", upcoming == NULL ? NULL : upcoming->album);
+	json_object_object_add (object, "nextDuration", json_object_new_int64 (upcoming == NULL ? 0 : upcoming->length));
+	/* For the wrapper alone, which downloads whole songs for its listeners and
+	 * never passes these on: Pandora audio URLs expire and carry access tokens. */
+	const bool remote = !app->offline;
+	string (object, "_audioUrl", remote && song != NULL ? song->audioUrl : NULL);
+	string (object, "_trackToken", remote && song != NULL ? song->trackToken : NULL);
+	string (object, "_nextAudioUrl", remote && upcoming != NULL ? upcoming->audioUrl : NULL);
+	string (object, "_nextTrackToken", remote && upcoming != NULL ? upcoming->trackToken : NULL);
+	string (object, "_proxy", app->settings.proxy);
 	string (object, "title", song == NULL ? NULL : song->title);
 	string (object, "artist", song == NULL ? NULL : song->artist);
 	string (object, "album", song == NULL ? NULL : song->album);

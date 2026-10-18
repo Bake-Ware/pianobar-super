@@ -50,6 +50,8 @@ typedef struct {
 	PianoSong_t *pendingLocalSong;
 	PianoStation_t offlineStation;
 	PianoStation_t *onlineStation;
+	/* The last song of a playlist we already fetched the next one for. */
+	const PianoSong_t *prefetchedFor;
 } BarApp_t;
 
 #include <signal.h>

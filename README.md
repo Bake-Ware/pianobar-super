@@ -76,6 +76,16 @@ listening in one browser leaves other listeners playing. Browsers play concurren
 but are **not synchronized across rooms**. Browser audio is compressed PCM and
 can use up to roughly 1.4Mbps per listener before compression at 44.1kHz stereo.
 
+The Android app plays whole song files instead. The server downloads the current
+and next songs from Pandora as soon as the player knows them, because Pandora's
+URLs expire. The files go in `delivery/` under the song cache, which starts empty
+on every run and keeps only a few recent songs. `GET /api/tracks/<trackId>`
+serves a file, with Range requests; `/api/state` lists `trackId`/`nextTrackId`
+and whether each is ready. Saved songs are served from the library. While the
+last song of a Pandora playlist plays, the player fetches the next playlist, so
+a next song is nearly always known. An on-air DJ line is at `djVoice.audio`
+(`GET /api/dj/line/<id>`).
+
 The installer enables password-protected LAN access. HTTP is intended for a trusted
 network; use an authenticated HTTPS reverse proxy for Internet access. No public
 domain, tunnel, or external login provider is bundled or provisioned.

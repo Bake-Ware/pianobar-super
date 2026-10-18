@@ -266,6 +266,40 @@ static void BarMainGetPlaylist (BarApp_t *app) {
 			pRet, wRet);
 }
 
+/*	While the last song of a playlist plays, fetch the next playlist and
+ *	append it, so the song after this one (and its audio URL) is known
+ *	before this one ends. Clients that download whole files can then have
+ *	it ready. A failure is harmless: the playlist is fetched again when
+ *	the song ends, as before.
+ */
+static void BarMainPrefetchPlaylist (BarApp_t *app) {
+	PianoSong_t *song = app->playlist;
+	if (app->offline || song == NULL || PianoListNextP (song) != NULL ||
+			app->curStation == NULL || app->nextStation != app->curStation ||
+			app->prefetchedFor == song || app->modeRequest != 0 ||
+			BarPlayerGetMode (&app->player) != PLAYER_PLAYING) {
+		return;
+	}
+	pthread_mutex_lock (&app->player.lock);
+	const unsigned int played = app->player.songPlayed;
+	pthread_mutex_unlock (&app->player.lock);
+	/* Not at the very start: a skipped song needs no successor yet. */
+	if (played < 5) { return; }
+	app->prefetchedFor = song;
+	PianoReturn_t pRet;
+	CURLcode wRet;
+	PianoRequestDataGetPlaylist_t reqData = {.station = app->curStation,
+			.quality = app->settings.audioQuality};
+	const bool networkError = app->networkError;
+	BarUiMsg (&app->settings, MSG_INFO, "Receiving the next playlist... ");
+	if (BarUiPianoCall (app, PIANO_REQUEST_GET_PLAYLIST, &reqData, &pRet, &wRet) &&
+			reqData.retPlaylist != NULL) {
+		/* Only the main thread changes the list; the player keeps its song. */
+		app->playlist = PianoListAppendP (app->playlist, reqData.retPlaylist);
+	}
+	app->networkError = networkError;
+}
+
 /*	start new player thread
  */
 static void BarMainStartPlayback (BarApp_t *app, pthread_t *playerThread) {
@@ -465,6 +499,7 @@ static void BarMainLoop (BarApp_t *app) {
 				started = true;
 			}
 		}
+		BarMainPrefetchPlaylist (app);
 		BarWebState (app);
 		BarWebPoll (app);
 		BarMainHandleUserInput (app);

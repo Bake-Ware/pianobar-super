@@ -99,9 +99,9 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
     private lateinit var session: MediaSession
     private lateinit var audio: AudioManager
     private lateinit var focus: AudioFocusRequest
-    private var stream: LiveStream? = null
+    private var stream: Listening? = null
     /** A stopped stream kept connected for a while, so listening again starts quickly. */
-    private var parked: LiveStream? = null
+    private var parked: Listening? = null
     private val expireParked = Runnable { parked?.stop(); parked = null }
     private var retained = false
     private var noisyRegistered = false
@@ -185,7 +185,10 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
 
     // ---- Live stream -----------------------------------------------------------------------
 
-    override fun startListening() {
+    override fun startListening() = startListening(pcm = false)
+
+    /** Whole songs from the server, or with [pcm] (or an older server) its live PCM stream. */
+    private fun startListening(pcm: Boolean) {
         if (stream != null) return
         val api = app.repo.api.value ?: run { ListenTimer.cancel(); Playback.update { it.copy(message = "Choose your server first.") }; return }
         ListenTimer.mark("service")
@@ -208,8 +211,8 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
             return
         }
         warm?.stop()
-        lateinit var created: LiveStream
-        created = LiveStream(api, app.repo.store.deviceName) { status, message ->
+        lateinit var created: Listening
+        val report = { status: StreamStatus, message: String ->
             main.post {
                 // A parked or replaced stream doesn't speak for this phone.
                 if (stream !== created) return@post
@@ -217,7 +220,18 @@ class PlaybackService : MediaSessionService(), LivePlayer.Controls {
                 Playback.update { it.copy(stream = status, message = message) }
                 if (status == StreamStatus.SignInRequired) { app.repo.reconnect(); stopListening(keepWarm = false) }
             }
+            Unit
         }
+        val files = !pcm && app.repo.snapshot.value?.let { it.delivery == "files" } != false
+        created = if (files) TrackStream(this, api, app.repo.store.deviceName, app.repo.snapshot, app.repo.skips, report) {
+            main.post {
+                if (stream !== created) return@post
+                Log.i(TAG, "the server only streams live audio; using that")
+                stream = null
+                created.stop()
+                startListening(pcm = true)
+            }
+        } else LiveStream(api, app.repo.store.deviceName, report)
         stream = created
         created.start()
         live.setListening(true, false)

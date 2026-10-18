@@ -186,7 +186,11 @@ class Repository(private val app: Context) {
         }
     }
 
+    /** Next was pressed (here, in the widget, or on a headset): the phone can jump to the song it already has. */
+    val skips = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+
     suspend fun command(body: JsonObject): Boolean {
+        if ((body["action"] as? JsonPrimitive)?.content == "act_songnext") skips.tryEmit(Unit)
         _busy.value = true
         try {
             return attempt { it.post("api/command", body) } != null
