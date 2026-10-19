@@ -1622,9 +1622,18 @@ body[data-pinned="true"] #widget-pin {
 .dj-empty { margin: 2px 0 8px; font-size: 11px; line-height: 1.6; color: #d0d9cc; }
 .dj-form { margin-top: 12px; }
 .dj-form label { display: block; margin-bottom: 6px; font-size: 9px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; color: #becabc; }
+.dj-call .dj-field + .dj-field { margin-top: 6px; }
+.dj-call-who select { flex-shrink: 0; padding: 7px 8px; border: 1px solid #506056; border-radius: 0; background: #172b2b; color: #f4f4eb; font-size: 11px; }
+.dj-call-who input { border-right: 0; }
+.dj-call-status { margin-top: 6px; }
+.dj-call-list { margin: 0; padding: 0; list-style: none; }
+.dj-call-list li { display: flex; flex-direction: column; gap: 2px; padding: 6px 0; border-bottom: 1px solid #3d504799; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.dj-call-list .dj-log-meta.dj-call-answered { color: var(--orange); }
+.dj-call-list q { quotes: "“" "”"; }
+.dj-call-list .dj-call-answer { color: #d0d9cc; }
 @media (prefers-reduced-motion: reduce) { .dj-light { animation: none !important; } .dj-track, .dj-track::after { transition: none; } }
 @media (max-width: 560px) {
-    .dj-field input { font-size: 16px; }
+    .dj-field input, .dj-call-who select { font-size: 16px; }
     .dj-button, .dj-switch { min-height: 44px; }
 }
 

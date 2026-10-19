@@ -981,7 +981,75 @@ function renderDJ(data) {
     djLogVoice = voice.id;
     if ($('dj-log').open) loadDJLog();
   }
+  // Calls need the LLM to be answered. A new line on air or a shorter queue may have answered yours.
+  $('dj-call-form').hidden = !llm;
+  const callSignature = `${station.callsWaiting || 0}/${voice.status === 'on_air' ? voice.id : ''}`;
+  if (llm && callSignature !== djCallSignature) {
+    djCallSignature = callSignature;
+    loadCalls(station.callsWaiting || 0);
+  }
 }
+// Call-ins: this browser remembers its own calls by id and shows when the DJ answers them.
+let djCallSignature = null, djCallTimer = null;
+function myCalls() {
+  try { return JSON.parse(localStorage.getItem('pianobarCalls') || '[]').filter(id => /^[0-9a-f]{16}$/.test(id)); } catch (_) { return []; }
+}
+function rememberCall(id) {
+  try { localStorage.setItem('pianobarCalls', JSON.stringify([id, ...myCalls().filter(item => item !== id)].slice(0, 5))); } catch (_) {}
+}
+function callStatus(waiting, calls) {
+  const held = calls.filter(call => call.status === 'waiting').map(call => call.position || 1);
+  return held.length ? `You're #${Math.min(...held)} in line. The DJ answers at the next break.` :
+    waiting ? `${waiting} ${waiting === 1 ? 'caller' : 'callers'} waiting for the next break.` : 'The DJ answers on air at the next break.';
+}
+async function loadCalls(waiting) {
+  clearTimeout(djCallTimer);
+  const ids = myCalls();
+  let calls = [];
+  if (ids.length) {
+    try { ({waiting, calls} = await djJSON('/api/dj/calls?ids=' + ids.join(','))); } catch (_) { return; }
+  }
+  calls.sort((a, b) => b.at - a.at);
+  $('dj-call-status').textContent = callStatus(waiting, calls);
+  $('dj-call-list').replaceChildren(...calls.map(call => {
+    const row = document.createElement('li');
+    const meta = document.createElement('span');
+    const clock = at => new Date(at * 1000).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'});
+    meta.className = 'dj-log-meta' + (call.status === 'answered' ? ' dj-call-answered' : '');
+    meta.textContent = [clock(call.at), call.kind === 'request' ? 'Song request' : 'Call',
+                        call.status === 'answered' ? 'Answered on air ' + clock(call.answeredAt) : `On hold · #${call.position || 1} in line`].join(' · ');
+    const text = document.createElement('q');
+    text.textContent = (call.caller ? call.caller + ': ' : '') + call.message;
+    row.append(meta, text);
+    if (call.answer) {
+      const answer = document.createElement('span');
+      answer.className = 'dj-call-answer';
+      answer.textContent = 'DJ: ' + spokenText(call.answer);
+      row.append(answer);
+    }
+    return row;
+  }));
+  $('dj-call-list').hidden = !calls.length;
+  // Keep checking while one of yours is on hold.
+  if (calls.some(call => call.status === 'waiting')) djCallTimer = setTimeout(() => loadCalls(waiting), 10000);
+}
+try { $('dj-call-name').value = localStorage.getItem('pianobarCallerName') || ''; } catch (_) {}
+$('dj-call-form').addEventListener('submit', async event => {
+  event.preventDefault();
+  const message = $('dj-call-message').value.trim();
+  if (!message || $('dj-call-send').disabled) return;
+  const caller = $('dj-call-name').value.trim();
+  try { localStorage.setItem('pianobarCallerName', caller); } catch (_) {}
+  $('dj-call-send').disabled = true;
+  try {
+    const call = await djJSON('/api/dj/call', {message, caller, kind: $('dj-call-kind').value});
+    rememberCall(call.id);
+    $('dj-call-message').value = '';
+    notify(call.note);
+    loadCalls(call.position);
+  } catch (error) { notify(error.message); }
+  finally { $('dj-call-send').disabled = false; }
+});
 // The on-air log: every line the DJ actually said, newest first.
 let djLogVoice = null;
 const djLogKinds = {call: 'Call-in', announce: 'Read on air'};

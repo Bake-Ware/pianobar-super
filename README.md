@@ -280,6 +280,29 @@ falls back to a plain intro if the provider rejects tools or a server is slow.
 Tool output is passed to the model as untrusted data. `GET /api/dj/tools` checks
 each server and lists its tools.
 
+### Call-ins from the web page
+
+The DJ booth has a **Call in** box: type a message or a song request (up to 200
+characters, with an optional name) and the DJ answers it on air at its next
+break, in the intro for the next song. Each break takes up to three calls, oldest
+first, so none are lost when several arrive. A song request also queues a
+matching saved song when the station plays saved music. The web password does
+not name people, so the name comes from the box, or from Cloudflare Access when
+it sits in front of the site.
+
+- `POST /api/dj/call` takes `{message, caller?, kind?}` (`kind` is `message` or
+  `request`). It returns the call's `id`, its place in line and whether the DJ is
+  talking. Calls wait while the DJ is off the air.
+- Each listener (by address) gets one call every 30 seconds and six an hour. At
+  most 20 calls wait at once. Over a limit, the answer is 429 with `Retry-After`.
+- `GET /api/dj/calls?ids=a,b` reports those calls: `waiting` with a position, or
+  `answered` with the DJ's line and when it aired. The page uses this to show the
+  caller when they are on the air.
+- `djStation.callsWaiting` in `GET /api/state` counts the queue.
+- A call counts as answered only once its line is on air. A line that is dropped
+  (a skipped song, a failed voice) gives its calls back to the queue. Waiting
+  calls are kept in private `dj_calls.json` and survive restarts.
+
 ### The station's MCP endpoint
 
 `POST /mcp` is a Streamable HTTP MCP server (JSON responses) behind the same web
