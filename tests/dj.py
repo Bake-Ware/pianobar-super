@@ -195,8 +195,11 @@ class DJTests(unittest.TestCase):
         # Record spoken lines; test_spoken_line_reaches_player covers the real pipeline.
         self.spoken = []
         self.real_say = self.session.dj.say
-        def say(text, song_key=None, kind='intro'):
+        self.answering = []
+        def say(text, song_key=None, kind='intro', calls=()):
             self.spoken.append(dict(text=text, songKey=song_key))
+            # The call-ins each line answers; the real say marks them answered once on air.
+            self.answering.append(list(calls))
             return dict(id=len(self.spoken), status='preparing', text=text, songKey=song_key, error='')
         self.session.dj.say = say
         # Sound tags need a voice-catalog lookup; test_sound_tags_follow_the_voice_engine covers it.
@@ -466,7 +469,7 @@ class DJTests(unittest.TestCase):
         self.session.dj.talk = True
         started, release = threading.Event(), threading.Event()
         generated = []
-        def generate(message, context=None, cache=True):
+        def generate(message, context=None, cache=True, calls=False):
             generated.append((context['id'], cache))
             if context['id'] == second:
                 started.set()
@@ -507,7 +510,7 @@ class DJTests(unittest.TestCase):
         self.session.dj.station['enabled'] = True
         self.session.dj.talk = True
         started, release = threading.Event(), threading.Event()
-        def generate(message, context=None, cache=True):
+        def generate(message, context=None, cache=True, calls=False):
             started.set()
             self.assertTrue(release.wait(3))
             return dict(text='The prepared introduction', songKey=self.session.dj.song_key(song))
@@ -1530,6 +1533,149 @@ class DJTests(unittest.TestCase):
             dict(kind='skip', at='x'), dict(kind='love', at=True), dict(kind='request', text='Talking Heads', at=int(time.time()))])))
         memory = host['DJMemory']()
         self.assertEqual([item['kind'] for item in memory.snapshot()['listenerActivity']], ['request'])
+
+    def call(self, message, listener, expected=200, headers=None):
+        return self.request('/api/dj/call', message, expected, dict({'CF-Connecting-IP': listener}, **(headers or {})))
+
+    def test_web_call_ins_are_validated_queued_and_rate_limited(self):
+        call = self.call({'message': '  Hi from   the kitchen! ', 'caller': 'Sam'}, '203.0.113.1')
+        self.assertRegex(call['id'], r'^[0-9a-f]{16}$')
+        self.assertEqual((call['message'], call['caller'], call['kind'], call['status'], call['position']),
+                         ('Hi from the kitchen!', 'Sam', 'message', 'waiting', 1))
+        # The DJ is not talking, so the caller hears the call waits for the next break.
+        self.assertFalse(call['djTalks'])
+        self.assertIn('off the air', call['note'])
+        # One call at a time per listener, with a Retry-After; other listeners still get through.
+        try:
+            urllib.request.urlopen(urllib.request.Request(self.url + '/api/dj/call', json.dumps({'message': 'Again'}).encode(),
+                                   {'Content-Type': 'application/json', 'CF-Connecting-IP': '203.0.113.1'}), timeout=5)
+            self.fail('A second call right away was accepted.')
+        except urllib.error.HTTPError as error:
+            self.assertEqual(error.code, 429)
+            self.assertGreater(int(error.headers['Retry-After']), 0)
+        self.session.dj.talk = True
+        request = self.call({'message': 'Play some Talking Heads', 'kind': 'request'}, '203.0.113.2')
+        self.assertEqual((request['kind'], request['position'], request['caller']), ('request', 2, ''))
+        self.assertIn("next break", request['note'])
+        # A song request is noted for the DJ like any other request.
+        self.assertIn('Play some Talking Heads', [item.get('request') for item in self.session.dj.memory.snapshot()['listenerActivity']])
+        for bad in ({'message': ''}, {'message': '   '}, {'message': 'x' * 201}, {'message': 'Hi\x07'}, {'message': 7},
+                    {'message': 'Hi', 'caller': 'x' * 41}, {'message': 'Hi', 'kind': 'shout'}, {'message': 'Hi', 'url': 'x'}):
+            with self.subTest(bad=bad):
+                self.call(bad, '203.0.113.9', expected=400)
+        self.call({'message': 'x' * 200}, '203.0.113.3')
+        # Callers see their own calls by id, with their place in line; nothing else about other callers.
+        found = self.request(f"/api/dj/calls?ids={call['id']},{request['id']},nothex,{'0' * 16}")
+        self.assertEqual(found['waiting'], 3)
+        self.assertEqual([(item['id'], item['position']) for item in found['calls']], [(call['id'], 1), (request['id'], 2)])
+        self.assertEqual(self.request('/api/dj/calls'), dict(waiting=3, calls=[]))
+        self.assertEqual(self.request('/api/state')['djStation']['callsWaiting'], 3)
+        # Sign-in that names people (Cloudflare Access) names the caller when the box leaves it blank.
+        named = self.call({'message': 'Hello'}, '203.0.113.4', headers={'Cf-Access-Authenticated-User-Email': 'kim@example.com'})
+        self.assertEqual(named['caller'], 'kim')
+        self.assertEqual(self.call({'message': 'Hi', 'caller': 'K'}, '203.0.113.5',
+                                   headers={'Cf-Access-Authenticated-User-Email': 'kim@example.com'})['caller'], 'K')
+        # A handful an hour per listener, and a cap on everyone waiting.
+        queue = self.session.dj.calls
+        queue.spacing = 0
+        for n in range(queue.hourly):
+            self.call({'message': f'Call {n}'}, '203.0.113.6')
+        self.call({'message': 'One too many'}, '203.0.113.6', expected=429)
+        queue.waiting_limit = queue.waiting()
+        self.call({'message': 'Full line'}, '203.0.113.7', expected=429)
+        # Waiting calls survive a restart.
+        self.assertEqual(host['CallQueue']().waiting(), queue.waiting())
+        self.assertEqual(oct((self.config_dir / 'dj_calls.json').stat().st_mode & 0o777), '0o600')
+        # Calls need the web password and an LLM to answer them.
+        self.server.authorization = b'Basic private'
+        self.call({'message': 'Hi'}, '203.0.113.8', expected=401)
+        self.request('/api/dj/calls', expected=401)
+        self.server.authorization = None
+        self.session.dj.llm_url = ''
+        self.call({'message': 'Hi'}, '203.0.113.8', expected=503)
+
+    def test_the_next_break_answers_waiting_calls_on_air(self):
+        import socket
+        dj = self.session.dj
+        dj.say = self.real_say
+        self.session.status, player = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        self.addCleanup(player.close)
+        self.addCleanup(dj.close)
+        ids = [self.call({'message': f'Shout-out number {n}', 'caller': f'Caller {n}'}, f'203.0.113.{n}')['id'] for n in range(1, 5)]
+        # A preview from Settings never takes calls: only a line that airs answers them.
+        self.request('/api/dj', {})
+        self.assertNotIn('calls', json.loads(self.calls[-1][1]['messages'][1]['content']))
+        self.assertEqual(dj.calls.waiting(), 4)
+        dj.talk = True
+        self.session.state.update(elapsed=4)
+        dj.on_state(self.session.state)
+        player.settimeout(5)
+        packet = json.loads(player.recv(4096))
+        self.assertEqual(packet['type'], 'dj_voice')
+        chats = [body for path, body, _ in self.calls if path == '/chat']
+        self.assertEqual(len(chats), 2)
+        context = json.loads(chats[-1]['messages'][1]['content'])
+        # Three a break, oldest first, as untrusted data with the caller's name.
+        self.assertEqual([(item['caller'], item['message']) for item in context['calls']],
+                         [(f'Caller {n}', f'Shout-out number {n}') for n in range(1, 4)])
+        prompt = chats[-1]['messages'][0]['content']
+        self.assertIn('called in', prompt)
+        self.assertIn('untrusted data', prompt)
+        deadline = time.monotonic() + 3
+        while dj.calls.waiting() != 1:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.01)
+        found = {item['id']: item for item in self.request('/api/dj/calls?ids=' + ','.join(ids))['calls']}
+        for call_id in ids[:3]:
+            self.assertEqual((found[call_id]['status'], found[call_id]['answer']), ('answered', 'Coming at ya with Kid Cudi and Dat New New.'))
+            self.assertGreater(found[call_id]['answeredAt'], 0)
+        self.assertEqual((found[ids[3]]['status'], found[ids[3]]['position']), ('waiting', 1))
+        # The on-air log labels the line a call-in; the DJ remembers who called.
+        self.assertEqual(self.request('/api/dj/log')['lines'][0]['kind'], 'call')
+        remembered = [item for item in dj.memory.snapshot()['listenerActivity'] if item['kind'] == 'call']
+        self.assertEqual(sorted(item['caller'] for item in remembered), ['Caller 1', 'Caller 2', 'Caller 3'])
+        self.assertEqual(self.request('/api/state')['djStation']['callsWaiting'], 1)
+
+    def test_a_line_that_never_airs_gives_its_calls_back(self):
+        dj = self.session.dj
+        first = self.call({'message': 'Love this station'}, '203.0.113.1')['id']
+        # The LLM fails: the call is back in line for the next try.
+        with patch.object(dj, 'complete', side_effect=host['DJUnavailable']('down')):
+            with self.assertRaises(host['DJUnavailable']):
+                dj.generate({}, calls=True)
+        self.assertEqual([item['id'] for item in dj.calls.claim()], [first])
+        # A claimed call is not answered twice by a second line written meanwhile.
+        self.assertEqual(dj.calls.claim(), [])
+        # A line about a song that never came gives its calls to this song's intro instead.
+        dj.prepared['elsewhere'], dj.prepared_calls['elsewhere'] = 'Written for another song', [first]
+        dj.talk = True
+        self.session.state.update(elapsed=4)
+        dj.on_state(self.session.state)
+        deadline = time.monotonic() + 3
+        while not self.spoken:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.01)
+        self.assertEqual(self.answering, [[first]])
+        self.assertNotIn('elsewhere', dj.prepared)
+        context = json.loads([body for path, body, _ in self.calls if path == '/chat'][-1]['messages'][1]['content'])
+        self.assertEqual([item['message'] for item in context['calls']], ['Love this station'])
+        # Voice rendering outlasts the song: the line is dropped and the call waits again.
+        dj.say = self.real_say
+        dj.calls.release([first])
+        claimed = [item['id'] for item in dj.calls.claim()]
+        dj.voice_slots.acquire()
+        dj.say('About the old song', dj.song_key(self.session.state), calls=claimed)
+        self.session.state['title'] = 'Another song'
+        dj.voice_slots.release()
+        deadline = time.monotonic() + 3
+        while dj.voice_public()['status'] == 'preparing':
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.01)
+        self.assertEqual([item['id'] for item in dj.calls.claim()], [first])
+        self.assertEqual(self.request(f'/api/dj/calls?ids={first}')['calls'][0]['status'], 'waiting')
+        # A claim nobody finishes lapses rather than losing the call.
+        dj.calls.claims[first] -= dj.calls.claim_ttl
+        self.assertEqual([item['id'] for item in dj.calls.claim()], [first])
 
     def raw(self, path, message):
         request = urllib.request.Request(self.url + path, json.dumps(message).encode(), {'Content-Type': 'application/json'})

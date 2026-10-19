@@ -56,6 +56,13 @@
           </div>
           <div id="dj-mic" class="dj-mic" hidden><blockquote id="dj-line" aria-live="polite"></blockquote><button id="dj-stop" class="dj-button" type="button" hidden>■ Stop</button></div>
           <p id="dj-notice" class="dj-notice" hidden><span id="dj-notice-text"></span> <a id="dj-notice-link" href="#settings">Open DJ settings</a></p>
+          <form id="dj-call-form" class="dj-form dj-call" hidden>
+            <label for="dj-call-message">Call in</label>
+            <div class="dj-field dj-call-who"><input id="dj-call-name" maxlength="40" placeholder="Your name (optional)" aria-label="Your name" autocomplete="nickname"><select id="dj-call-kind" aria-label="Kind of call"><option value="message">Message</option><option value="request">Song request</option></select></div>
+            <div class="dj-field"><input id="dj-call-message" maxlength="200" placeholder="Say hi, give a shout-out, or ask for a song…" autocomplete="off" required><button id="dj-call-send" class="dj-button" type="submit">Call</button></div>
+            <p id="dj-call-status" class="dj-empty dj-call-status" role="status">The DJ answers on air at the next break.</p>
+            <ol id="dj-call-list" class="dj-call-list" aria-label="Your calls" hidden></ol>
+          </form>
           <details id="dj-more" class="dj-more"><summary><span id="dj-lineup-title">Up next</span></summary>
             <p id="dj-hop-status" class="dj-empty" hidden></p>
             <ol id="dj-queue" hidden></ol><p id="dj-lineup-empty" class="dj-empty"></p>
