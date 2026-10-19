@@ -34,14 +34,15 @@ enum class StreamStatus { Connecting, Waiting, Playing, Reconnecting, SignInRequ
  * The phone as one of the server's listening devices: it registers like a
  * browser, keeps its lease with heartbeats, and plays the server's live PCM
  * through an AudioTrack. Runs on its own threads; never blocks the UI.
+ * Only for servers that can't serve whole songs; see [TrackStream].
  *
  * [park] silences it at once and asks the server to stop sending audio, but
  * keeps the registration and connection so [resume] can start again quickly.
  */
-class LiveStream(val api: Api, private val deviceName: String, private val onStatus: (StreamStatus, String) -> Unit) {
-    @Volatile var duck = 1f
+class LiveStream(override val api: Api, private val deviceName: String, private val onStatus: (StreamStatus, String) -> Unit) : Listening {
+    @Volatile override var duck = 1f
     /** Muted for a phone call or another app's sound; the lease is kept. */
-    @Volatile var held = false
+    @Volatile override var held = false
     @Volatile private var cancelled = false
     @Volatile private var call: Call? = null
     @Volatile var clientId = ""
@@ -61,13 +62,14 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
     private var beat: ScheduledFuture<*>? = null
     private var thread: Thread? = null
 
-    fun start() {
+    override fun start() {
         thread = Thread({ run() }, "pianobar-pcm").also { it.start() }
-        beat = heartbeats.scheduleWithFixedDelay({ heartbeat() }, 2, 10, TimeUnit.SECONDS)
+        // The DJ only counts a device that checked in within the last 10 s as listening.
+        beat = heartbeats.scheduleWithFixedDelay({ heartbeat() }, 2, 5, TimeUnit.SECONDS)
     }
 
     /** Silence now and stop the server sending audio; keep the lease and connection. */
-    fun park() {
+    override fun park() {
         synchronized(playLock) { parked = true; parkings.bump(); output?.pause() }
         // Report Playing again once audio flows after resume().
         if (status == StreamStatus.Playing) set(StreamStatus.Waiting, "")
@@ -76,7 +78,7 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
     }
 
     /** Undo [park]. False if this stream has ended and a new one is needed. */
-    fun resume(): Boolean {
+    override fun resume(): Boolean {
         if (cancelled) return false
         synchronized(playLock) { parked = false; parkings.bump() }
         // Assume the server agrees, so the first (prefilled) audio isn't dropped.
@@ -106,7 +108,7 @@ class LiveStream(val api: Api, private val deviceName: String, private val onSta
             post("api/command", buildJsonObject { put("output", "both") })
     }
 
-    fun stop() {
+    override fun stop() {
         cancelled = true
         call?.cancel()
         thread?.interrupt()

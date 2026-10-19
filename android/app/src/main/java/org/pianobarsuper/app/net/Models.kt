@@ -18,6 +18,8 @@ data class Snapshot(
     val djStation: DjStation? = null,
     val djVoice: DjVoice? = null,
     val playlist: PlaylistRun? = null,
+    /** "files" when the server serves whole songs at api/tracks/<id>; older servers only stream live PCM. */
+    val delivery: String = "",
 )
 
 @Serializable
@@ -42,6 +44,12 @@ data class PlayerState(
     val nextTitle: String = "",
     val nextArtist: String = "",
     val nextAlbum: String = "",
+    val nextDuration: Int = 0,
+    /** Whole-file ids of the current and next songs (api/tracks/<id>), and whether the server has them yet. */
+    val trackId: String = "",
+    val nextTrackId: String = "",
+    val trackReady: Boolean = false,
+    val nextTrackReady: Boolean = false,
     val title: String = "",
     val artist: String = "",
     val album: String = "",
@@ -113,7 +121,18 @@ data class DjSet(val songs: List<SongRef> = emptyList(), val position: Int = 0, 
 data class SongRef(val id: String = "", val title: String = "", val artist: String = "", val duration: Int = 0)
 
 @Serializable
-data class DjVoice(val id: Int = 0, val status: String = "idle", val text: String = "", val songKey: String = "", val error: String = "")
+data class DjVoice(
+    val id: Int = 0,
+    val status: String = "idle",
+    val text: String = "",
+    val songKey: String = "",
+    val error: String = "",
+    /** While on air: the line's audio file, and how to mix it (dB levels). */
+    val audio: String = "",
+    val overMusic: Boolean = true,
+    val level: Double = 0.0,
+    val duck: Double = -12.0,
+)
 
 @Serializable
 data class PlaylistRun(val id: String = "", val name: String = "", val position: Int = 0, val total: Int = 0, val shuffle: Boolean = false)

@@ -59,8 +59,25 @@ choice, it appears as a dialog with buttons for the choices.
 ## Listening on the phone
 
 The headphones button joins the server as a listening device, like a browser
-tab: the phone registers, keeps its lease with heartbeats, and plays the
-server's live 16-bit PCM through `AudioTrack`.
+tab: the phone registers and keeps its lease with heartbeats. It plays **whole
+song files**, not a live stream:
+
+- The server downloads each song from Pandora as soon as it is known (the
+  current one and the next) and serves it at `api/tracks/<id>`.
+- The phone downloads the current song, plays it from local storage, and
+  downloads the next one meanwhile, so songs change without a gap and **Next**
+  jumps straight to the file it already has. A weak connection can't interrupt
+  a song that is playing.
+- The server's player stays in charge of what plays. The phone follows its song,
+  pauses and skips from any device, and stays within about a second of it by
+  changing the playback speed by 2% (pitch kept).
+- DJ lines are fetched as files too and mixed on the phone: dipping the music,
+  or pausing it for the line, as the server is set to.
+- An older server that only streams live audio gets the previous behavior: its
+  16-bit PCM through `AudioTrack`.
+
+`adb logcat -s pianobar` shows each song change (`gapless`, `jump`, `load`), drift
+corrections and DJ lines.
 
 - **Background play:** it runs in a Media3 media session service, so it keeps
   playing with the screen off.
@@ -70,7 +87,7 @@ server's live 16-bit PCM through `AudioTrack`.
   - Stop (or tapping the headphones again) stops listening on this phone.
 - **Interruptions:** calls and other apps follow Android audio focus. Unplugging
   headphones stops listening.
-- **Connection drops:** the app reconnects with backoff.
+- **Connection drops:** downloads resume with Range requests and retry with backoff.
 
 ## Updates from your server
 
@@ -156,6 +173,8 @@ Unit tests cover:
 - server address validation and same-origin checks;
 - the PCM frame parser (byte order, fragmented reads, keepalives, malformed
   frames);
+- the song file cache (current song first, Range resume, waiting for the server,
+  rejecting sign-in pages, eviction);
 - the API client against a mock server: credentials only for the origin, no
   Origin header, cookies kept, redirects and HTML meaning "sign in", error
   messages;
