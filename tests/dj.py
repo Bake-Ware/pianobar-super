@@ -197,9 +197,9 @@ class DJTests(unittest.TestCase):
         self.real_say = self.session.dj.say
         self.answering = []
         def say(text, song_key=None, kind='intro', calls=()):
-            self.spoken.append(dict(text=text, songKey=song_key))
-            # The call-ins each line answers; the real say marks them answered once on air.
+            # The call-ins each line answers (the real say marks them answered once on air), noted before the line itself.
             self.answering.append(list(calls))
+            self.spoken.append(dict(text=text, songKey=song_key))
             return dict(id=len(self.spoken), status='preparing', text=text, songKey=song_key, error='')
         self.session.dj.say = say
         # Sound tags need a voice-catalog lookup; test_sound_tags_follow_the_voice_engine covers it.
@@ -1632,7 +1632,10 @@ class DJTests(unittest.TestCase):
         self.assertEqual((found[ids[3]]['status'], found[ids[3]]['position']), ('waiting', 1))
         # The on-air log labels the line a call-in; the DJ remembers who called.
         self.assertEqual(self.request('/api/dj/log')['lines'][0]['kind'], 'call')
-        remembered = [item for item in dj.memory.snapshot()['listenerActivity'] if item['kind'] == 'call']
+        # The voice thread records each caller just after marking the calls answered.
+        while len(remembered := [item for item in dj.memory.snapshot()['listenerActivity'] if item['kind'] == 'call']) < 3:
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(.01)
         self.assertEqual(sorted(item['caller'] for item in remembered), ['Caller 1', 'Caller 2', 'Caller 3'])
         self.assertEqual(self.request('/api/state')['djStation']['callsWaiting'], 1)
 
@@ -1668,9 +1671,10 @@ class DJTests(unittest.TestCase):
         self.session.state['title'] = 'Another song'
         dj.voice_slots.release()
         deadline = time.monotonic() + 3
-        while dj.voice_public()['status'] == 'preparing':
+        while dj.voice_public()['status'] == 'preparing' or first in dj.calls.claims:
             self.assertLess(time.monotonic(), deadline)
             time.sleep(.01)
+        self.assertEqual(dj.voice_public()['status'], 'idle')
         self.assertEqual([item['id'] for item in dj.calls.claim()], [first])
         self.assertEqual(self.request(f'/api/dj/calls?ids={first}')['calls'][0]['status'], 'waiting')
         # A claim nobody finishes lapses rather than losing the call.
