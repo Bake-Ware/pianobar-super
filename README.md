@@ -85,6 +85,8 @@ and whether each is ready. Saved songs are served from the library. While the
 last song of a Pandora playlist plays, the player fetches the next playlist, so
 a next song is nearly always known. An on-air DJ line is at `djVoice.audio`
 (`GET /api/dj/line/<id>`).
+The app registers as a listening device with `files: true`: it never attaches
+to the live stream, so the DJ counts it as listening from its heartbeat alone.
 
 The installer enables password-protected LAN access. HTTP is intended for a trusted
 network; use an authenticated HTTPS reverse proxy for Internet access. No public

@@ -111,6 +111,8 @@ class TrackStream(
         private set
     @Volatile private var waits = 0
     @Volatile private var resyncs = 0
+    /** The server didn't accept "files" when registering (an early whole-file version). */
+    @Volatile private var plainRegistration = false
 
     // Main thread only.
     private var snapshot: Snapshot? = null
@@ -159,7 +161,8 @@ class TrackStream(
         scope.launch { snapshots.collect { onSnapshot(it) } }
         scope.launch { skips.collect { skip() } }
         background { register() }
-        try { calls.scheduleWithFixedDelay({ heartbeat() }, 10, 10, TimeUnit.SECONDS) } catch (e: RejectedExecutionException) { }
+        // The DJ only counts a device that checked in within the last 10 s as listening.
+        try { calls.scheduleWithFixedDelay({ heartbeat() }, 2, 5, TimeUnit.SECONDS) } catch (e: RejectedExecutionException) { }
         set(StreamStatus.Connecting, "")
     }
 
@@ -455,7 +458,15 @@ class TrackStream(
 
     private fun register(retry: Long = 1) {
         if (cancelled || clientId.isNotEmpty()) return
-        val id = post("api/clients/register", buildJsonObject { put("name", deviceName) })?.get("id")?.jsonPrimitive?.content
+        // "files" tells the server this phone hears the music without the live stream, so the DJ talks.
+        val body = buildJsonObject { put("name", deviceName); if (!plainRegistration) put("files", true) }
+        val reply = try { call("api/clients/register", body) } catch (e: LoginRequired) { main.post { signIn() }; null
+        } catch (e: ApiError) {
+            // An early whole-file server: register as before (the retry comes in a second).
+            if (e.status == 400) plainRegistration = true
+            null
+        } catch (e: Exception) { null }
+        val id = reply?.get("id")?.jsonPrimitive?.content
         if (id == null) {
             try { calls.schedule({ register((retry * 2).coerceAtMost(15)) }, retry, TimeUnit.SECONDS) } catch (e: RejectedExecutionException) { }
             return

@@ -729,11 +729,15 @@ class Browsers:
                                 for p in self.pages.values()], 'leaseSeconds': self.lease}
 
     def register(self, message):
-        if set(message) - {'name'}:
+        if set(message) - {'name', 'files'}:
             raise ValueError('Unsupported registration fields.')
         name = Configuration.line(message.get('name', 'Browser'), 'Browser name').strip()
         if not name or len(name) > 80:
             raise ValueError('Browser name must contain 1–80 characters.')
+        # A device that plays whole songs (/api/tracks) instead of the live stream.
+        files = message.get('files', False)
+        if type(files) is not bool:
+            raise ValueError('files must be a boolean.')
         with self.lock:
             self.prune()
             if len(self.pages) >= 256:
@@ -741,6 +745,8 @@ class Browsers:
             key = secrets.token_hex(16)
             page = dict(id=key, name=name, enabled=False, volume=1.0,
                         status='idle', ready=False, seen=time.monotonic())
+            if files:
+                page['files'] = True
             self.pages[key] = page
             return self.public(page)
 
@@ -1586,7 +1592,7 @@ class DJ:
         self.tools.configure(settings.get('mcp_servers'))
 
     def listening(self):
-        """Somebody can hear the music: host speakers, or an audible browser."""
+        """Somebody can hear the music: host speakers, or an audible browser or app."""
         state = self.session.state
         if state.get('paused') or self.session.exited or self.session.restart.is_set() or self.session.setup_required:
             return False
@@ -1596,7 +1602,8 @@ class DJ:
             attached = set(self.session.audio_listeners.values())
         now = time.monotonic()
         with self.session.clients.lock:
-            return any(page['id'] in attached and page['enabled'] and page['ready'] and page['volume'] > 0 and
+            # Devices that play whole songs never attach to the live stream; their heartbeat says it all.
+            return any((page['id'] in attached or page.get('files')) and page['enabled'] and page['ready'] and page['volume'] > 0 and
                        page['status'] == 'playing' and now - page['seen'] < 10 for page in self.session.clients.pages.values())
 
     def require_listening(self):

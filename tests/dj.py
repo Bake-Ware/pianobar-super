@@ -258,6 +258,17 @@ class DJTests(unittest.TestCase):
         self.session.audio_listeners.clear()
         self.request('/api/dj', {}, expected=503)
         self.assertEqual(self.calls, [])
+        # An app playing whole songs never attaches to the live stream; its heartbeat counts.
+        clients = self.session.clients
+        files = clients.register({'name': 'Phone', 'files': True})['id']
+        clients.update({'id': files, 'enabled': True})
+        with self.assertRaises(ValueError): clients.register({'name': 'Phone', 'files': 'yes'})
+        self.assertFalse(self.session.dj.listening())
+        clients.heartbeat({'id': files, 'status': 'playing', 'ready': True})
+        self.assertTrue(self.session.dj.listening())
+        clients.heartbeat({'id': files, 'status': 'waiting', 'ready': True})
+        self.assertFalse(self.session.dj.listening())
+        clients.unregister({'id': files})
         # Explicit Settings previews remain usable with music stopped.
         self.assertEqual(self.request('/api/voice', {'text': 'A sample', 'voice': 'radio'}), self.wav)
         # The DJ talks through the player, so host speakers count as a listener.

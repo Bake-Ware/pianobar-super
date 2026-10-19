@@ -64,7 +64,8 @@ class LiveStream(override val api: Api, private val deviceName: String, private 
 
     override fun start() {
         thread = Thread({ run() }, "pianobar-pcm").also { it.start() }
-        beat = heartbeats.scheduleWithFixedDelay({ heartbeat() }, 2, 10, TimeUnit.SECONDS)
+        // The DJ only counts a device that checked in within the last 10 s as listening.
+        beat = heartbeats.scheduleWithFixedDelay({ heartbeat() }, 2, 5, TimeUnit.SECONDS)
     }
 
     /** Silence now and stop the server sending audio; keep the lease and connection. */
