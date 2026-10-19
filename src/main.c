@@ -449,6 +449,8 @@ static void BarMainLoop (BarApp_t *app) {
 				histsong->head.next = NULL;
 				BarUiHistoryPrepend (app, histsong);
 			}
+			/* A new song: the old pointer may be freed and its address reused. */
+			app->prefetchedFor = NULL;
 			started = false;
 			if (app->doQuit) { break; }
 			const int request = app->modeRequest;
