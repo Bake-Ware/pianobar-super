@@ -1,6 +1,7 @@
 package org.pianobarsuper.app.widget
 
 import android.app.Activity
+import android.app.AlarmManager
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
@@ -18,12 +19,15 @@ import android.graphics.Shader
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.TypedValue
 import android.view.View
 import android.widget.RemoteViews
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.scale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
@@ -33,6 +37,7 @@ import kotlinx.serialization.json.put
 import okhttp3.Request
 import org.pianobarsuper.app.PianobarApp
 import org.pianobarsuper.app.R
+import org.pianobarsuper.app.data.Connection
 import org.pianobarsuper.app.playback.Playback
 import org.pianobarsuper.app.ui.MainActivity
 
@@ -40,35 +45,42 @@ import org.pianobarsuper.app.ui.MainActivity
 class NowPlayingWidget : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
         NowPlayingWidgets.update(context, ids)
-        refresh(context)
+        val app = context.applicationContext as PianobarApp
+        val pending = goAsync()
+        app.repo.scope.launch { try { NowPlayingWidgets.refresh(app) } finally { pending.finish() } }
     }
 
     override fun onAppWidgetOptionsChanged(context: Context, manager: AppWidgetManager, id: Int, options: Bundle) =
         NowPlayingWidgets.update(context, intArrayOf(id))
 
-    /** Without the app open nothing polls the server, so fetch the current song once. */
-    private fun refresh(context: Context) {
-        val app = context.applicationContext as PianobarApp
-        val pending = goAsync()
-        app.repo.scope.launch { try { app.repo.refreshOnce() } finally { pending.finish() } }
-    }
-
+    override fun onDisabled(context: Context) = NowPlayingWidgets.cancelRefresh(context)
 }
 
-/** Next and Love from the widget. Not exported: only the widget's own buttons reach it. */
+/** Next, Love and the widget's timed refresh. Not exported: only the widget's own buttons and alarm reach it. */
 class WidgetActionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val action = when (intent.action) {
             NEXT -> "act_songnext"
             LOVE -> "act_songlove"
+            REFRESH -> null
             else -> return
         }
         val app = context.applicationContext as PianobarApp
         val pending = goAsync()
         app.repo.scope.launch {
             try {
+                if (action == null) return@launch NowPlayingWidgets.refresh(app)
+                if (app.repo.snapshot.value == null) NowPlayingWidgets.refresh(app)
+                val before = app.repo.snapshot.value?.state
                 app.repo.command(buildJsonObject { put("action", action) })
-                app.repo.refreshOnce()
+                // The server takes a moment to change song or love it; look until it shows.
+                repeat(4) {
+                    delay(750)
+                    NowPlayingWidgets.refresh(app)
+                    if (app.repo.connection.value !is Connection.Online) return@launch
+                    val now = app.repo.snapshot.value?.state ?: return@launch
+                    if (before == null || now.songKey != before.songKey || now.loved != before.loved) return@launch
+                }
             } finally {
                 pending.finish()
             }
@@ -78,6 +90,7 @@ class WidgetActionReceiver : BroadcastReceiver() {
     companion object {
         const val NEXT = "org.pianobarsuper.app.widget.NEXT"
         const val LOVE = "org.pianobarsuper.app.widget.LOVE"
+        const val REFRESH = "org.pianobarsuper.app.widget.REFRESH"
     }
 }
 
@@ -104,7 +117,14 @@ object NowPlayingWidgets {
     private var artKey = ""
     private var art: Bitmap? = null
 
-    /** Follow the app's state for as long as the process lives. */
+    private var refreshing: Job? = null
+
+    /**
+     * Follow the app's state for as long as the process lives. A process started in the
+     * background (the update check, an alarm, a button) has no song yet, so fetch one, and
+     * keep a refresh scheduled for when the song ends: nothing else polls unless the app
+     * is open or the phone is listening.
+     */
     fun init(app: PianobarApp) {
         app.repo.scope.launch {
             combine(app.repo.snapshot, Playback.state, app.repo.connection) { snapshot, phone, connection ->
@@ -115,7 +135,31 @@ object NowPlayingWidgets {
                 if (next.art != artKey) loadArt(app, next.art)
             }
         }
+        app.repo.scope.launch { app.repo.snapshot.collect { scheduleRefresh(app) } }
+        if (widgetIds(app).isNotEmpty()) app.repo.scope.launch { refresh(app) }
     }
+
+    /** One fresh snapshot unless the app is already polling; concurrent callers share the fetch. */
+    suspend fun refresh(app: PianobarApp) {
+        val job = refreshing?.takeIf { it.isActive } ?: app.repo.scope.launch { app.repo.refreshOnce() }.also { refreshing = it }
+        job.join()
+        scheduleRefresh(app)
+    }
+
+    private fun refreshIntent(context: Context) = PendingIntent.getBroadcast(context, 4,
+        Intent(context, WidgetActionReceiver::class.java).setAction(WidgetActionReceiver.REFRESH),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+
+    /** A non-wakeup alarm: a sleeping phone isn't woken for it, it fires when the screen next comes on. */
+    private fun scheduleRefresh(app: PianobarApp) {
+        if (widgetIds(app).isEmpty()) return cancelRefresh(app)
+        val delayMs = WidgetContent.refreshDelaySeconds(app.repo.snapshot.value, app.repo.connection.value) * 1000
+        app.getSystemService(AlarmManager::class.java).set(AlarmManager.ELAPSED_REALTIME, SystemClock.elapsedRealtime() + delayMs, refreshIntent(app))
+    }
+
+    fun cancelRefresh(context: Context) = context.getSystemService(AlarmManager::class.java).cancel(refreshIntent(context))
+
+    private fun widgetIds(context: Context) = AppWidgetManager.getInstance(context).getAppWidgetIds(ComponentName(context, NowPlayingWidget::class.java))
 
     private suspend fun loadArt(app: PianobarApp, key: String) {
         artKey = key
@@ -155,7 +199,7 @@ object NowPlayingWidgets {
 
     fun update(context: Context, ids: IntArray? = null) {
         val manager = AppWidgetManager.getInstance(context)
-        val all = ids ?: manager.getAppWidgetIds(ComponentName(context, NowPlayingWidget::class.java))
+        val all = ids ?: widgetIds(context)
         if (all.isEmpty()) return
         val app = context.applicationContext as PianobarApp
         val shown = content ?: WidgetContent.from(app.repo.snapshot.value, Playback.state.value, app.repo.connection.value)

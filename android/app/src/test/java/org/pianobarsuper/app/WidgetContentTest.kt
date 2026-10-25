@@ -46,6 +46,21 @@ class WidgetContentTest {
         assertFalse(nothing.canNext)
     }
 
+    @Test fun connectingBeforeTheFirstFetch() {
+        assertEquals("Connecting…", WidgetContent.from(null, PhonePlayback(), Connection.Connecting).artist)
+    }
+
+    @Test fun refreshesJustAfterTheSongEnds() {
+        val song = playing.copy(state = playing.state.copy(elapsed = 100, duration = 240))
+        assertEquals(143L, WidgetContent.refreshDelaySeconds(song, Connection.Online))
+        assertEquals(10L, WidgetContent.refreshDelaySeconds(song.copy(state = song.state.copy(elapsed = 240)), Connection.Online))
+        assertEquals(15L, WidgetContent.refreshDelaySeconds(song.copy(pending = true), Connection.Online))
+        assertEquals(15 * 60L, WidgetContent.refreshDelaySeconds(song.copy(state = song.state.copy(paused = true)), Connection.Online))
+        assertEquals(15 * 60L, WidgetContent.refreshDelaySeconds(Snapshot(), Connection.Online))
+        assertEquals(5 * 60L, WidgetContent.refreshDelaySeconds(null, Connection.Online))
+        assertEquals(5 * 60L, WidgetContent.refreshDelaySeconds(song, Connection.Unreachable("x")))
+    }
+
     @Test fun lastKnownSongWhenOffline() {
         val content = WidgetContent.from(playing.copy(state = playing.state.copy(paused = true)), PhonePlayback(), Connection.Unreachable("x"))
         assertEquals("Breathe", content.title)
