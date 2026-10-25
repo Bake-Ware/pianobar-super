@@ -11,8 +11,8 @@ android {
         applicationId 'org.pianobarsuper.app'
         minSdk 26
         targetSdk 35
-        versionCode 11
-        versionName '2026.10.18.1'
+        versionCode 12
+        versionName '2026.10.25.1'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
     buildFeatures { buildConfig true; compose true }

@@ -23,7 +23,11 @@ data class WidgetContent(
             return when {
                 connection is Connection.NoServer -> WidgetContent("pianobar", "Open the app to choose your server")
                 connection is Connection.SignInRequired -> WidgetContent("pianobar", "Sign in to your server", status = "Tap to open the app")
-                snapshot == null -> WidgetContent("pianobar", if (connection is Connection.Unreachable) "Can’t reach your server" else "Not connected",
+                snapshot == null -> WidgetContent("pianobar", when (connection) {
+                        is Connection.Unreachable -> "Can’t reach your server"
+                        Connection.Connecting -> "Connecting…"
+                        else -> "Not connected"
+                    },
                     status = if (phone.listening) listeningStatus else "Tap to open the app", listening = phone.listening)
                 else -> {
                     val state = snapshot.state
@@ -41,6 +45,21 @@ data class WidgetContent(
                         art = if (playing) state.cachedCover.ifEmpty { state.metadata?.cover?.ifEmpty { null } ?: state.cover } else "",
                     )
                 }
+            }
+        }
+
+        /**
+         * When nothing is polling, how long until the widget should look at the server again:
+         * just after the current song ends, soon while a command is in flight, rarely when idle
+         * or when the server can't be reached.
+         */
+        fun refreshDelaySeconds(snapshot: Snapshot?, connection: Connection): Long {
+            val state = snapshot?.state ?: return 5 * 60L
+            return when {
+                connection !is Connection.Online -> 5 * 60L
+                snapshot.pending || snapshot.restarting -> 15L
+                state.title.isEmpty() || state.paused || state.duration <= 0 -> 15 * 60L
+                else -> (state.duration - state.elapsed + 3L).coerceIn(10L, 15 * 60L)
             }
         }
     }
